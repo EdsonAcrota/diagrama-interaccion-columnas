@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diseño de Columnas - Diagrama de Interacción</title>
+    
+    <!-- CDNs Necesarios -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .chart-container { position: relative; height: 520px; width: 100%; }
+        /* Personalización de scrollbar para el panel de aceros */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect, useRef } = React;
+
+        // Componente de Icono Simple para reemplazar Lucide-React en CDN
+        const Icon = ({ name, size = 20, className = "" }) => {
+            useEffect(() => {
+                if (window.lucide) {
+                    window.lucide.createIcons();
+                }
+            }, [name]);
+            return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
+        };
+
+        const BAR_SIZES = [
+            { label: '3/8"', area: 0.71, d_mm: 9.5 },
+            { label: '1/2"', area: 1.29, d_mm: 12.7 },
+            { label: '5/8"', area: 1.99, d_mm: 15.9 },
+            { label: '3/4"', area: 2.84, d_mm: 19.1 },
+            { label: '1"', area: 5.10, d_mm: 25.4 },
+            { label: '1 3/8"', area: 10.06, d_mm: 35.8 },
+        ];
+
+        const App = () => {
+            const [section, setSection] = useState({ b: 40, h: 60, rec: 4 });
+            const [materials, setMaterials] = useState({ fc: 210, fy: 4200 });
+            const [layers, setLayers] = useState([
+                { id: 1, d: 5, count: 3, barIndex: 2 },
+                { id: 2, d: 55, count: 3, barIndex: 2 }
+            ]);
+            const [load, setLoad] = useState({ mu: 15, pu: 120 });
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+
+            const results = useMemo(() => {
+                const { b, h } = section;
+                const { fc, fy } = materials;
+                const Es = 2000000;
+                const beta1 = fc <= 280 ? 0.85 : Math.max(0.65, 0.85 - (0.05 * (fc - 280)) / 70);
+                const Ag = b * h;
+                
+                const processedLayers = layers.map(l => ({
+                    d: l.d,
+                    as: l.count * BAR_SIZES[l.barIndex].area
+                }));
+                const Ast = processedLayers.reduce((sum, l) => sum + l.as, 0);
+
+                const P0 = (0.85 * fc * (Ag - Ast) + Ast * fy) / 1000;
+                const Pmax = 0.80 * 0.65 * P0;
+
+                let nominal = [];
+                let design = [];
+
+                const calculatePoint = (c) => {
+                    let a = Math.min(beta1 * c, h);
+                    let Cc = 0.85 * fc * b * a;
+                    let Pn = Cc;
+                    let Mn = Cc * (h / 2 - a / 2);
+                    let et_extrema = 0;
+                    const d_max = Math.max(...processedLayers.map(l => l.d));
+                    
+                    processedLayers.forEach(layer => {
+                        const es = 0.003 * (c - layer.d) / c;
+                        const fs = Math.min(Math.max(es * Es, -fy), fy);
+                        const Fs = layer.as * fs;
+                        Pn += Fs;
+                        Mn += Fs * (h / 2 - layer.d);
+                        if (layer.d === d_max) et_extrema = Math.abs(0.003 * (d_max - c) / c);
+                    });
+
+                    let phi = 0.65;
+                    if (et_extrema >= 0.005) phi = 0.90;
+                    else if (et_extrema > 0.002) phi = 0.65 + (0.90 - 0.65) * (et_extrema - 0.002) / (0.005 - 0.002);
+
+                    return { Pn: Pn / 1000, Mn: Math.abs(Mn / 100000), phi };
+                };
+
+                const d_extremo = Math.max(...processedLayers.map(l => l.d));
+                const ey = fy / Es;
+                const c_bal = (0.003 * d_extremo) / (0.003 + ey);
+                const balPoint = calculatePoint(c_bal);
+
+                const steps = 120;
+                for (let i = 0; i <= steps; i++) {
+                    let c;
+                    if (i === 0) c = 0.001; 
+                    else if (i === steps) c = 10000; 
+                    else c = (h * 2 / steps) * i;
+                    const pt = calculatePoint(c);
+                    nominal.push({ x: pt.Mn, y: pt.Pn });
+                    design.push({ x: pt.phi * pt.Mn, y: Math.min(pt.phi * pt.Pn, Pmax) });
+                }
+
+                const sortedDesign = [...design].sort((a,b) => a.y - b.y);
+                let isSafe = false;
+                const pu = load.pu;
+                const mu = load.mu;
+                const upper = sortedDesign.find(p => p.y >= pu);
+                const lower = [...sortedDesign].reverse().find(p => p.y <= pu);
+                if (upper && lower) {
+                    const mRes = lower.x + (upper.x - lower.x) * (pu - lower.y) / (upper.y - lower.y || 1);
+                    if (mu <= mRes) isSafe = true;
+                }
+
+                return { nominal, design, P0, Pmax, isSafe, balPoint };
+            }, [section, materials, layers, load]);
+
+            // Efecto para inicializar y actualizar el gráfico
+            useEffect(() => {
+                const ctx = chartRef.current.getContext('2d');
+                if (chartInstance.current) chartInstance.current.destroy();
+
+                chartInstance.current = new Chart(ctx, {
+                    type: 'scatter',
+                    data: {
+                        datasets: [
+                            {
+                                label: 'Nominal',
+                                data: results.nominal,
+                                borderColor: '#94a3b8',
+                                borderWidth: 1,
+                                borderDash: [4, 4],
+                                showLine: true,
+                                pointRadius: 0,
+                            },
+                            {
+                                label: 'Diseño (φ)',
+                                data: results.design,
+                                borderColor: '#2563eb',
+                                backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                                borderWidth: 3,
+                                showLine: true,
+                                pointRadius: 0,
+                                fill: true,
+                            },
+                            {
+                                label: 'Falla Balanceada',
+                                data: [{ x: results.balPoint.phi * results.balPoint.Mn, y: results.balPoint.phi * results.balPoint.Pn }],
+                                backgroundColor: '#f59e0b',
+                                borderColor: '#fff',
+                                borderWidth: 2,
+                                pointRadius: 8,
+                            },
+                            {
+                                label: 'Carga Solicitante',
+                                data: [{ x: load.mu, y: load.pu }],
+                                backgroundColor: '#ef4444',
+                                borderColor: '#fff',
+                                borderWidth: 2,
+                                pointRadius: 10,
+                                pointStyle: 'rectRot',
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: { title: { display: true, text: 'Momento Flector Mu (ton-m)', font: { size: 10, weight: 'bold' } }, grid: { borderDash: [2, 2] } },
+                            y: { title: { display: true, text: 'Carga Axial Pu (ton)', font: { size: 10, weight: 'bold' } }, grid: { borderDash: [2, 2] } }
+                        },
+                        plugins: { legend: { display: false } }
+                    }
+                });
+            }, [results, load]);
+
+            const exportToCSV = () => {
+                let csvContent = "data:text/csv;charset=utf-8,";
+                csvContent += "Punto,Mn (ton-m),Pn (ton),phiMn (ton-m),phiPn (ton-m)\n";
+                const totalPoints = results.nominal.length;
+                const step = Math.floor(totalPoints / 19);
+                for(let i = 0; i < 20; i++) {
+                    const idx = Math.min(i * step, totalPoints - 1);
+                    const pt = results.nominal[idx];
+                    const dpt = results.design[idx];
+                    csvContent += `${i+1},${pt.x.toFixed(4)},${pt.y.toFixed(4)},${dpt.x.toFixed(4)},${dpt.y.toFixed(4)}\n`;
+                }
+                const encodedUri = encodeURI(csvContent);
+                const link = document.createElement("a");
+                link.setAttribute("href", encodedUri);
+                link.setAttribute("download", "20_puntos_diagrama.csv");
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            const addLayer = () => setLayers([...layers, { id: Date.now(), d: section.h / 2, count: 2, barIndex: 2 }]);
+            const removeLayer = (id) => layers.length > 1 && setLayers(layers.filter(l => l.id !== id));
+            const updateLayer = (id, key, val) => setLayers(layers.map(l => l.id === id ? { ...l, [key]: val } : l));
+
+            const drawScale = 240 / (Math.max(section.b, section.h) + 20);
+
+            return (
+                <div className="min-h-screen p-4 md:p-6">
+                    <div className="max-w-7xl mx-auto">
+                        
+                        <header className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4 bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                            <div>
+                                <div className="flex items-center gap-2 text-blue-600 mb-0.5">
+                                    <Icon name="drafting-compass" size={20} />
+                                    <span className="font-bold uppercase text-[10px] tracking-widest">Structural Analysis v2.5</span>
+                                </div>
+                                <h1 className="text-2xl font-black text-slate-800">Diagrama de Interacción</h1>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <button onClick={exportToCSV} className="flex items-center gap-2 bg-slate-100 text-slate-700 px-4 py-2 rounded-xl text-sm font-bold hover:bg-slate-200 transition-all active:scale-95 border border-slate-200">
+                                    <Icon name="download" size={16} /> 20 Puntos CSV
+                                </button>
+                                <div className={`px-4 py-2 rounded-xl flex items-center gap-2 font-bold shadow-sm border ${results.isSafe ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-rose-50 text-rose-700 border-rose-100'}`}>
+                                    <Icon name={results.isSafe ? "check-circle-2" : "alert-circle"} size={18} />
+                                    {results.isSafe ? 'SECCIÓN OK' : 'FALLA'}
+                                </div>
+                            </div>
+                        </header>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                            
+                            <div className="lg:col-span-4 space-y-6">
+                                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                                    <div className="bg-slate-800 p-3 text-white flex items-center gap-2">
+                                        <Icon name="eye" size={16} />
+                                        <h2 className="font-bold text-xs uppercase tracking-wider">Geometría de la Sección</h2>
+                                    </div>
+                                    <div className="p-8 bg-slate-50 flex justify-center items-center h-[360px]">
+                                        <svg width="100%" height="100%" viewBox={`-30 -40 ${section.b * drawScale + 60} ${section.h * drawScale + 80}`} className="drop-shadow-lg">
+                                            <rect x="0" y="0" width={section.b * drawScale} height={section.h * drawScale} fill="#cbd5e1" stroke="#64748b" strokeWidth="2" />
+                                            <rect x={section.rec * drawScale} y={section.rec * drawScale} width={(section.b - 2 * section.rec) * drawScale} height={(section.h - 2 * section.rec) * drawScale} fill="none" stroke="#94a3b8" strokeWidth="1.5" strokeDasharray="4" />
+                                            <line x1="0" y1="-15" x2={section.b * drawScale} y2="-15" stroke="#475569" strokeWidth="1" />
+                                            <text x={(section.b * drawScale) / 2} y="-22" textAnchor="middle" fontSize="12" fill="#475569" fontWeight="bold">b={section.b}</text>
+                                            <line x1="-15" y1="0" x2="-15" y2={section.h * drawScale} stroke="#475569" strokeWidth="1" />
+                                            <text x="-22" y={(section.h * drawScale) / 2} textAnchor="middle" fontSize="12" fill="#475569" fontWeight="bold" transform={`rotate(-90, -22, ${(section.h * drawScale) / 2})`}>h={section.h}</text>
+                                            {layers.map((layer) => {
+                                                const posY = layer.d * drawScale;
+                                                const innerWidth = (section.b - 2 * section.rec) * drawScale;
+                                                const startX = section.rec * drawScale;
+                                                return Array.from({ length: layer.count }).map((_, i) => {
+                                                    const spacing = layer.count > 1 ? innerWidth / (layer.count - 1) : 0;
+                                                    const posX = layer.count > 1 ? startX + (i * spacing) : (section.b * drawScale) / 2;
+                                                    const r = (BAR_SIZES[layer.barIndex].d_mm / 10) * drawScale * 0.5; 
+                                                    return <circle key={`${layer.id}-${i}`} cx={posX} cy={posY} r={Math.max(r, 3)} fill="#1e293b" />;
+                                                });
+                                            })}
+                                        </svg>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 space-y-4">
+                                    <div className="flex items-center gap-2 border-b pb-2 mb-2">
+                                        <Icon name="settings" size={16} className="text-slate-400" />
+                                        <h2 className="font-bold text-xs uppercase text-slate-500">Parámetros</h2>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Base (cm)</label>
+                                            <input type="number" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm" value={section.b} onChange={e => setSection({...section, b: +e.target.value})} />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Peralte (cm)</label>
+                                            <input type="number" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm" value={section.h} onChange={e => setSection({...section, h: +e.target.value})} />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">f'c (kg/cm²)</label>
+                                            <input type="number" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm" value={materials.fc} onChange={e => setMaterials({...materials, fc: +e.target.value})} />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">fy (kg/cm²)</label>
+                                            <input type="number" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm" value={materials.fy} onChange={e => setMaterials({...materials, fy: +e.target.value})} />
+                                        </div>
+                                        <div className="col-span-2">
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Recubrimiento (cm)</label>
+                                            <input type="number" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm" value={section.rec} onChange={e => setSection({...section, rec: +e.target.value})} />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                                    <div className="bg-slate-100 p-3 flex items-center justify-between border-b">
+                                        <h2 className="font-bold text-xs uppercase text-slate-600 flex items-center gap-2"><Icon name="layers" size={14} /> Refuerzo</h2>
+                                        <button onClick={addLayer} className="bg-blue-600 text-white p-1 rounded-lg hover:bg-blue-700 transition-colors"><Icon name="plus" size={16} /></button>
+                                    </div>
+                                    <div className="p-4 space-y-3 max-h-[300px] overflow-y-auto">
+                                        {layers.map((layer, idx) => (
+                                            <div key={layer.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 relative group">
+                                                <button onClick={() => removeLayer(layer.id)} className="absolute top-2 right-2 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Icon name="trash-2" size={14} /></button>
+                                                <div className="grid grid-cols-3 gap-2">
+                                                    <div><label className="text-[9px] font-bold text-slate-400 block mb-1">CANT.</label><input type="number" className="w-full p-1 bg-white border border-slate-200 rounded text-xs" value={layer.count} onChange={e => updateLayer(layer.id, 'count', +e.target.value)} /></div>
+                                                    <div><label className="text-[9px] font-bold text-slate-400 block mb-1">DIÁM.</label><select className="w-full p-1 bg-white border border-slate-200 rounded text-xs" value={layer.barIndex} onChange={e => updateLayer(layer.id, 'barIndex', +e.target.value)}>{BAR_SIZES.map((b, i) => <option key={i} value={i}>{b.label}</option>)}</select></div>
+                                                    <div><label className="text-[9px] font-bold text-slate-400 block mb-1">POS d</label><input type="number" className="w-full p-1 bg-white border border-slate-200 rounded text-xs" value={layer.d} onChange={e => updateLayer(layer.id, 'd', +e.target.value)} /></div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="lg:col-span-8 space-y-4">
+                                <div className="bg-blue-600 rounded-2xl shadow-md p-5 text-white flex flex-col md:flex-row items-center gap-6">
+                                    <div className="flex items-center gap-3 border-r border-blue-400 pr-6">
+                                        <Icon name="activity" size={24} className="text-blue-200" />
+                                        <div><h2 className="font-black text-sm uppercase">Carga Solicitante</h2><p className="text-[10px] text-blue-100 italic">Cargas últimas actuantes</p></div>
+                                    </div>
+                                    <div className="flex-grow grid grid-cols-2 gap-4 w-full md:w-auto">
+                                        <div className="flex flex-col"><label className="text-[10px] font-bold text-blue-200 uppercase mb-1">Mu (ton-m)</label><input type="number" step="0.5" className="bg-blue-700 border border-blue-500 rounded-xl p-3 text-lg font-bold outline-none" value={load.mu} onChange={e => setLoad({...load, mu: +e.target.value})} /></div>
+                                        <div className="flex flex-col"><label className="text-[10px] font-bold text-blue-200 uppercase mb-1">Pu (ton)</label><input type="number" step="1" className="bg-blue-700 border border-blue-500 rounded-xl p-3 text-lg font-bold outline-none" value={load.pu} onChange={e => setLoad({...load, pu: +e.target.value})} /></div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 h-[520px] flex flex-col relative">
+                                    <div className="flex items-center justify-between mb-4">
+                                        <h3 className="font-black text-slate-700 text-sm flex items-center gap-2"><Icon name="maximize-2" size={16} className="text-blue-500" /> DIAGRAMA Mn-Pn</h3>
+                                        <div className="flex gap-4">
+                                            <div className="flex items-center gap-1.5 text-[9px] font-bold text-slate-500"><div className="w-2.5 h-2.5 bg-amber-500 rounded-full"></div> BALANCEADO</div>
+                                            <div className="flex items-center gap-1.5 text-[9px] font-bold text-slate-500"><div className="w-2.5 h-2.5 bg-red-500 rounded-sm"></div> SOLICITANTE</div>
+                                        </div>
+                                    </div>
+                                    <div className="flex-grow relative overflow-hidden">
+                                        <canvas ref={chartRef}></canvas>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-center">
+                                        <span className="text-[9px] font-black text-slate-400 uppercase block mb-1">P₀ Nominal</span>
+                                        <span className="text-xl font-black text-slate-800">{results.P0.toFixed(1)} <small className="text-[10px] text-slate-400">ton</small></span>
+                                    </div>
+                                    <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-center">
+                                        <span className="text-[9px] font-black text-slate-400 uppercase block mb-1">φPn Máx</span>
+                                        <span className="text-xl font-black text-blue-600">{results.Pmax.toFixed(1)} <small className="text-[10px] text-slate-400">ton</small></span>
+                                    </div>
+                                    <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-center">
+                                        <span className="text-[9px] font-black text-slate-400 uppercase block mb-1">Punto Bal.</span>
+                                        <span className="text-xl font-black text-amber-600">{(results.balPoint.phi * results.balPoint.Pn).toFixed(1)} <small className="text-[10px] text-slate-400">ton</small></span>
+                                    </div>
+                                    <div className={`p-4 rounded-2xl border flex flex-col justify-center items-center shadow-sm ${results.isSafe ? 'bg-emerald-50 border-emerald-100' : 'bg-rose-50 border-rose-100'}`}>
+                                        <span className={`text-[9px] font-black uppercase mb-1 ${results.isSafe ? 'text-emerald-500' : 'text-rose-500'}`}>Ratio D/C</span>
+                                        <span className={`text-xl font-black ${results.isSafe ? 'text-emerald-700' : 'text-rose-700'}`}>{(load.pu / results.Pmax).toFixed(2)}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
