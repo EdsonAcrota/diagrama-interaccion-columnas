@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BeamDesigner Pro - Análisis de Ductilidad</title>
+    
+    <!-- CDNs Necesarios -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        @media print {
+            .no-print { display: none !important; }
+            body { background: white; margin: 0; padding: 20px; }
+            .report-container { border: none !important; box-shadow: none !important; width: 100% !important; max-width: 100% !important; }
+        }
+        /* Estilo para que el select sea legible */
+        select {
+            background-color: white !important;
+            color: #1e293b !important;
+            appearance: none;
+        }
+        option {
+            background-color: white !important;
+            color: #1e293b !important;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useMemo, useEffect, useRef } = React;
+
+        const Icon = ({ name, size = 20, className = "" }) => {
+            useEffect(() => {
+                if (window.lucide) window.lucide.createIcons();
+            }, [name]);
+            return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
+        };
+
+        const BAR_SIZES = [
+            { label: '3/8"', area: 0.71, d_mm: 9.5 },
+            { label: '1/2"', area: 1.29, d_mm: 12.7 },
+            { label: '5/8"', area: 1.99, d_mm: 15.9 },
+            { label: '3/4"', area: 2.84, d_mm: 19.1 },
+            { label: '1"', area: 5.10, d_mm: 25.4 },
+            { label: '1 3/8"', area: 10.06, d_mm: 35.8 },
+        ];
+
+        const App = () => {
+            // Manejamos los estados como strings para permitir el borrado completo en los inputs (sin ceros fijos)
+            const [section, setSection] = useState({ b: "30", h: "50", rec: "4" });
+            const [materials, setMaterials] = useState({ fc: "210", fy: "4200" });
+            const [reinforcement, setReinforcement] = useState({ count: "3", barIndex: 2 });
+            const [load, setLoad] = useState({ mu: "12.5" });
+            const [showReport, setShowReport] = useState(false);
+            
+            const strainChartRef = useRef(null);
+            const mPhiChartRef = useRef(null);
+            const reportChartRef = useRef(null);
+            
+            const strainInstance = useRef(null);
+            const mPhiInstance = useRef(null);
+            const reportChartInstance = useRef(null);
+            const reportDivRef = useRef(null);
+
+            // --- LÓGICA DE CÁLCULO ---
+            const results = useMemo(() => {
+                const b = parseFloat(section.b) || 0;
+                const h = parseFloat(section.h) || 0;
+                const rec = parseFloat(section.rec) || 0;
+                const fc = parseFloat(materials.fc) || 0;
+                const fy = parseFloat(materials.fy) || 0;
+                const rCount = parseFloat(reinforcement.count) || 0;
+                const mu_sol = parseFloat(load.mu) || 0;
+
+                if (b <= 0 || h <= 0 || fc <= 0 || fy <= 0 || rCount <= 0) return null;
+
+                const Es = 2000000; // kg/cm2
+                const Ec = 15100 * Math.sqrt(fc);
+                const n = Es / Ec;
+                const stirrupDiam = 0.95; // 3/8"
+                
+                const As = rCount * BAR_SIZES[reinforcement.barIndex].area;
+                const barRadius = BAR_SIZES[reinforcement.barIndex].d_mm / 20; 
+                const d = h - rec - stirrupDiam - barRadius; 
+
+                // 1. ESTADO DE AGRIETAMIENTO (cr)
+                const fr = 2 * Math.sqrt(fc); 
+                const Ig = (b * Math.pow(h, 3)) / 12;
+                const Mcr = (fr * Ig / (h / 2)) / 100000; 
+                const phi_cr = (Mcr * 100000) / (Ec * Ig); // rad/cm
+
+                // 2. ESTADO DE FLUENCIA (y)
+                const rho = As / (b * d);
+                const k = Math.sqrt(Math.pow(rho * n, 2) + 2 * rho * n) - (rho * n);
+                const c_yield = k * d;
+                const My = (As * fy * (d - c_yield / 3)) / 100000;
+                const ey = fy / Es;
+                const phi_y = ey / (d - c_yield); // rad/cm
+
+                // 3. ESTADO ÚLTIMO (u)
+                const beta1 = fc <= 280 ? 0.85 : Math.max(0.65, 0.85 - (0.05 * (fc - 280)) / 70);
+                const a_ult = (As * fy) / (0.85 * fc * b);
+                const c_ult = a_ult / beta1;
+                const Mn = (As * fy * (d - a_ult / 2)) / 100000; 
+                const et_ult = 0.003 * (d - c_ult) / c_ult;
+                const phi_u = 0.003 / c_ult; // rad/cm
+
+                // FACTORES DE ESCALA SOLICITADOS
+                const scaleStrain = 1000; // Multiplicador para x10^3
+                const scaleMphi = 100;    // rad/cm * 100 = rad/m
+
+                // 4. GENERACIÓN DE CURVA M-PHI
+                let curvePoints = [];
+                curvePoints.push({ x: 0, y: 0 });
+                curvePoints.push({ x: phi_cr * scaleMphi, y: Mcr });
+
+                // Zona de transición (Fisuración a Fluencia)
+                const stepsYield = 15;
+                for (let i = 1; i < stepsYield; i++) {
+                    const m_s = Mcr + (My - Mcr) * (i / stepsYield);
+                    const Ie = Math.pow(Mcr/m_s, 3)*Ig + (1 - Math.pow(Mcr/m_s, 3))*(Ec*b*Math.pow(c_yield, 3)/3 + Es*As*Math.pow(d-c_yield, 2))/Ec;
+                    const phi_s = (m_s * 100000) / (Ec * Math.min(Ig, Ie));
+                    curvePoints.push({ x: phi_s * scaleMphi, y: m_s });
+                }
+                const yieldIdx = curvePoints.length;
+                curvePoints.push({ x: phi_y * scaleMphi, y: My });
+
+                // Zona plástica (Fluencia a Último - Interpolación parabólica inversa)
+                const stepsUlt = 20;
+                for (let i = 1; i <= stepsUlt; i++) {
+                    const factor = i / stepsUlt;
+                    const phi_s = phi_y + (phi_u - phi_y) * factor;
+                    const m_factor = 2 * factor - factor * factor; // Forma parabólica
+                    const m_s = My + (Mn - My) * m_factor;
+                    curvePoints.push({ x: phi_s * scaleMphi, y: m_s });
+                }
+
+                let phi_red = 0.65;
+                if (et_ult >= 0.005) phi_red = 0.90;
+                else if (et_ult > 0.002) phi_red = 0.65 + (0.90 - 0.65) * (et_ult - 0.002) / (0.005 - 0.002);
+
+                const Md = phi_red * Mn;
+                // Validamos estrictamente que la capacidad sea mayor a la demanda
+                const isSafe = (Md >= mu_sol);
+
+                return { 
+                    As, d, a: a_ult, c: c_ult, et: et_ult, phi_red, Mn, Md, 
+                    rho, mu_phi: phi_u / phi_y, My, Mcr, phi_y, phi_u, phi_cr, curvePoints, 
+                    yieldIdx, lastIdx: curvePoints.length - 1, barRadius, stirrupDiam, isSafe,
+                    mu_sol, h, b, rec, scaleStrain, scaleMphi
+                };
+            }, [section, materials, reinforcement, load]);
+
+            // --- FUNCIÓN DE RENDERIZADO DE GRÁFICOS ---
+            const drawCharts = (isReportView = false) => {
+                if (!results) return;
+
+                // 1. Gráfico Deformaciones
+                if (!isReportView && strainChartRef.current) {
+                    const ctxS = strainChartRef.current.getContext('2d');
+                    if (strainInstance.current) strainInstance.current.destroy();
+                    strainInstance.current = new Chart(ctxS, {
+                        type: 'scatter', // Scatter con showLine para evitar distorsiones de eje X
+                        data: {
+                            datasets: [{
+                                label: 'ε (x10⁻³)',
+                                data: [
+                                    { x: 0.003 * results.scaleStrain, y: results.h },
+                                    { x: 0, y: results.h - results.c },
+                                    { x: -results.et * results.scaleStrain, y: results.h - results.d }
+                                ],
+                                borderColor: '#3b82f6', borderWidth: 3, pointRadius: 8, fill: false, tension: 0,
+                                showLine: true
+                            }]
+                        },
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            scales: { 
+                                x: { type: 'linear', title: { display: true, text: 'Deformación ε (x10⁻³)', font: { weight: 'bold' } } }, 
+                                y: { type: 'linear', min: 0, max: results.h, title: { display: true, text: 'Altura (cm)' } } 
+                            },
+                            plugins: { legend: { display: false } }
+                        }
+                    });
+                }
+
+                // 2. Gráfico Momento-Curvatura
+                const targetRef = isReportView ? reportChartRef : mPhiChartRef;
+                const targetInst = isReportView ? reportChartInstance : mPhiInstance;
+
+                if (targetRef.current) {
+                    const ctxM = targetRef.current.getContext('2d');
+                    if (targetInst.current) targetInst.current.destroy();
+                    targetInst.current = new Chart(ctxM, {
+                        type: 'scatter', // Uso de SCATTER obliga a un eje X estrictamente lineal numérico (Evita la línea vertical)
+                        data: {
+                            datasets: [
+                                {
+                                    label: 'Curva M-φ',
+                                    data: results.curvePoints,
+                                    borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                                    borderWidth: 4, fill: true, tension: 0,
+                                    pointRadius: (ctx) => [1, results.yieldIdx, results.lastIdx].includes(ctx.dataIndex) ? 6 : 0,
+                                    pointBackgroundColor: '#fff',
+                                    showLine: true
+                                },
+                                {
+                                    label: 'Mu Solicitado',
+                                    data: [
+                                        { x: 0, y: results.mu_sol },
+                                        { x: results.curvePoints[results.lastIdx].x, y: results.mu_sol }
+                                    ],
+                                    borderColor: '#ef4444', borderDash: [6, 6], borderWidth: 3, pointRadius: 0, fill: false,
+                                    showLine: true
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            scales: { 
+                                // type: 'linear' asegura que la distancia de 0 a 0.05 no sea igual que de 0.05 a 5.0
+                                x: { type: 'linear', title: { display: true, text: 'Curvatura φ (rad/m)', font: { weight: 'bold' } }, grid: { borderDash: [3, 3] } }, 
+                                y: { type: 'linear', title: { display: true, text: 'Momento M (ton-m)', font: { weight: 'bold' } }, beginAtZero: true } 
+                            },
+                            plugins: { 
+                                legend: { display: true, labels: { usePointStyle: true, boxWidth: 10 } },
+                                tooltip: { callbacks: { label: (ctx) => `M: ${ctx.parsed.y.toFixed(2)} t-m, φ: ${ctx.parsed.x.toFixed(4)} rad/m` } }
+                            }
+                        }
+                    });
+                }
+            };
+
+            useEffect(() => {
+                if (!showReport) {
+                    drawCharts(false);
+                } else {
+                    setTimeout(() => drawCharts(true), 200);
+                }
+            }, [results, showReport]);
+
+            const drawScale = 240 / (Math.max(parseFloat(section.b)||20, parseFloat(section.h)||20) + 20);
+
+            const SectionSVG = ({ isReport = false }) => {
+                const b = parseFloat(section.b) || 0;
+                const h = parseFloat(section.h) || 0;
+                const rec = parseFloat(section.rec) || 0;
+                const sPad = rec * drawScale;
+                const sW = (b - 2 * rec) * drawScale;
+                const sH = (h - 2 * rec) * drawScale;
+                
+                return (
+                    <svg width={isReport ? "180" : "100%"} height={isReport ? "240" : "100%"} viewBox={`-35 -45 ${b * drawScale + 70} ${h * drawScale + 90}`} className="drop-shadow-lg overflow-visible">
+                        <rect x="0" y="0" width={b * drawScale} height={h * drawScale} fill="#cbd5e1" stroke="#64748b" strokeWidth="2" />
+                        <rect x={sPad} y={sPad} width={sW} height={sH} fill="none" stroke="#94a3b8" strokeWidth="2" />
+                        <text x={(b * drawScale) / 2} y="-22" textAnchor="middle" fontSize="14" fill="#475569" fontWeight="bold">b={b} cm</text>
+                        <text x="-22" y={(h * drawScale) / 2} textAnchor="middle" fontSize="14" fill="#475569" fontWeight="bold" transform={`rotate(-90, -22, ${(h * drawScale) / 2})`}>h={h} cm</text>
+                        {results && Array.from({ length: parseInt(reinforcement.count) || 0 }).map((_, i) => {
+                            const r_px = (BAR_SIZES[reinforcement.barIndex].d_mm / 20) * drawScale;
+                            const offset = (rec + results.stirrupDiam + results.barRadius) * drawScale;
+                            const sX = offset;
+                            const eX = (b * drawScale) - offset;
+                            const pY = (results.d) * drawScale;
+                            const countNum = parseInt(reinforcement.count);
+                            const pX = (countNum > 1) ? sX + (i * (eX - sX) / (countNum - 1)) : (b * drawScale) / 2;
+                            return <circle key={i} cx={pX} cy={pY} r={Math.max(r_px, 6)} fill="#1e293b" />;
+                        })}
+                    </svg>
+                );
+            };
+
+            const downloadReport = () => {
+                const content = reportDivRef.current.innerHTML;
+                const chartImg = reportChartRef.current.toDataURL("image/png");
+                const finalHtml = `
+                    <!DOCTYPE html>
+                    <html lang="es">
+                    <head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"><\/script></head>
+                    <body class="p-10 bg-white font-sans">
+                        <div class="max-w-4xl mx-auto border-2 p-10 rounded-3xl shadow-xl">
+                            ${content.replace(/<canvas.*<\/canvas>/, `<img src="${chartImg}" class="w-full h-auto border rounded-2xl p-4 mt-6" />`)}
+                        </div>
+                    </body>
+                    </html>
+                `;
+                const blob = new Blob([finalHtml], { type: 'text/html' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; a.download = `Memoria_Viga_${section.b}x${section.h}.html`; a.click();
+            };
+
+            if (showReport && results) {
+                return (
+                    <div className="min-h-screen bg-slate-100 py-10 px-4">
+                        <div className="max-w-4xl mx-auto flex justify-between items-center mb-6 no-print font-bold text-slate-800">
+                            <button onClick={() => setShowReport(false)} className="flex items-center gap-2 hover:text-blue-600 transition-colors bg-white px-4 py-2 rounded-xl border shadow-sm"><Icon name="arrow-left" size={18} /> Volver al Diseño</button>
+                            <button onClick={downloadReport} className="bg-emerald-600 text-white px-6 py-2 rounded-xl font-black flex items-center gap-2 shadow-lg hover:bg-emerald-700"><Icon name="download" /> Guardar Memoria HTML</button>
+                        </div>
+                        <div ref={reportDivRef} className="bg-white p-12 max-w-4xl mx-auto border shadow-2xl rounded-3xl report-container text-slate-900">
+                            <header className="border-b-4 border-slate-900 pb-4 mb-8">
+                                <h1 className="text-3xl font-black uppercase mb-1">Memoria de Cálculo Estructural</h1>
+                                <p className="text-blue-600 font-bold uppercase tracking-widest text-xs">Viga Simplemente Reforzada - ACI 318</p>
+                            </header>
+                            <div className="grid grid-cols-2 gap-10 mb-8 text-sm">
+                                <div className="space-y-4 text-slate-700">
+                                    <h2 className="text-blue-600 font-black uppercase text-xs border-b pb-1">1. Parámetros de Diseño</h2>
+                                    <div className="grid grid-cols-2 gap-y-2 font-medium">
+                                        <span>Base de Viga:</span> <span className="font-bold text-slate-900">{section.b} cm</span>
+                                        <span>Peralte Total:</span> <span className="font-bold text-slate-900">{section.h} cm</span>
+                                        <span>f'c Concreto:</span> <span className="font-bold text-slate-900">{materials.fc} kg/cm²</span>
+                                        <span>fy Acero:</span> <span className="font-bold text-slate-900">{materials.fy} kg/cm²</span>
+                                        <span>Acero Total (As):</span> <span className="font-bold text-blue-700">{results.As.toFixed(2)} cm²</span>
+                                    </div>
+                                </div>
+                                <div className="flex justify-center bg-slate-50 rounded-3xl p-4 border"><SectionSVG isReport={true} /></div>
+                            </div>
+                            <div className="mb-8">
+                                <h2 className="text-blue-600 font-black uppercase text-xs border-b pb-1 mb-4">2. Análisis de Estados Críticos</h2>
+                                <table className="w-full text-left text-sm border-collapse rounded-xl overflow-hidden border">
+                                    <thead className="bg-slate-900 text-white uppercase text-[10px] font-black">
+                                        <tr><th className="p-3 border">Etapa del Análisis</th><th className="p-3 border">Curvatura φ (rad/m)</th><th className="p-3 border">Momento M (ton-m)</th></tr>
+                                    </thead>
+                                    <tbody className="divide-y text-slate-700">
+                                        <tr><td className="p-3 border font-bold">Agrietamiento (cr)</td><td className="p-3 border font-mono">{(results.phi_cr * results.scaleMphi).toFixed(5)}</td><td className="p-3 border">{results.Mcr.toFixed(2)}</td></tr>
+                                        <tr className="bg-blue-50/10"><td className="p-3 border font-bold">Fluencia Acero (y)</td><td className="p-3 border font-mono">{(results.phi_y * results.scaleMphi).toFixed(5)}</td><td className="p-3 border">{results.My.toFixed(2)}</td></tr>
+                                        <tr className="bg-emerald-50/10"><td className="p-3 border font-bold text-emerald-900">Capacidad Última (u)</td><td className="p-3 border font-mono">{(results.phi_u * results.scaleMphi).toFixed(5)}</td><td className="p-3 border font-black text-emerald-700">{results.Mn.toFixed(2)}</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div className="mb-8">
+                                <h2 className="text-blue-600 font-black uppercase text-xs border-b pb-1 mb-4">3. Comportamiento Momento-Curvatura</h2>
+                                <div className="h-80 w-full"><canvas ref={reportChartRef}></canvas></div>
+                            </div>
+                            <div className={`p-10 rounded-[2rem] border-4 flex justify-between items-center ${results.isSafe ? 'bg-emerald-50 border-emerald-200 shadow-emerald-50 shadow-xl' : 'bg-rose-50 border-rose-200 shadow-rose-50 shadow-xl'}`}>
+                                <div>
+                                    <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Dictamen de Capacidad</p>
+                                    <h3 className={`text-3xl font-black ${results.isSafe ? 'text-emerald-700' : 'text-rose-700'}`}>{results.isSafe ? 'DISEÑO SATISFACTORIO' : 'DISEÑO INSUFICIENTE'}</h3>
+                                </div>
+                                <div className="text-right">
+                                    <p className="text-[10px] font-black text-slate-400">RATIO D/C</p>
+                                    <p className="text-5xl text-emerald-600 font-black">{(results.mu_sol / results.Md).toFixed(2)}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen p-4 md:p-6 flex justify-center items-start">
+                    <div className="max-w-7xl w-full">
+                        <header className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-6 bg-white p-5 rounded-[2.5rem] shadow-sm border border-slate-200">
+                            <div className="flex items-center gap-4">
+                                <div className="bg-emerald-600 p-3 rounded-2xl text-white shadow-xl"><Icon name="activity" size={24} /></div>
+                                <div><h1 className="text-2xl font-black text-slate-800 tracking-tighter uppercase">BeamDesigner Pro</h1><p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Motor v2.5 | Ductilidad</p></div>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <button onClick={() => setShowReport(true)} className="bg-slate-900 text-white px-5 py-2.5 rounded-xl font-black text-xs hover:bg-black transition-all active:scale-95 shadow-lg">Memoria de Cálculo</button>
+                                <div className={`px-5 py-2.5 rounded-xl font-black text-xs border shadow-inner ${results?.isSafe ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-rose-50 text-rose-700 border-rose-100'}`}>{results?.isSafe ? 'SECCIÓN OK' : 'FALLA'}</div>
+                            </div>
+                        </header>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 text-slate-800 font-medium">
+                            <div className="lg:col-span-4 space-y-8 font-bold text-slate-700">
+                                <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200 overflow-hidden flex flex-col items-center">
+                                    <h2 className="font-black text-slate-400 uppercase text-[9px] tracking-widest self-start p-6 border-b w-full bg-slate-50/50 uppercase">Sección Transversal</h2>
+                                    <div className="p-10 w-full flex justify-center items-center h-[340px]"><SectionSVG /></div>
+                                </div>
+                                <div className="bg-white rounded-[2rem] shadow-sm border p-8 space-y-6 text-slate-800">
+                                    <h2 className="font-black text-slate-400 uppercase text-[9px] tracking-widest border-b pb-2 uppercase">Geometría y Materiales</h2>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="space-y-1"><label className="text-[10px] uppercase font-black text-slate-500">Base b (cm)</label><input type="number" className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl p-3 font-black focus:border-emerald-500 outline-none" value={section.b} onChange={e => setSection({...section, b: e.target.value})} /></div>
+                                        <div className="space-y-1"><label className="text-[10px] uppercase font-black text-slate-500">Altura h (cm)</label><input type="number" className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl p-3 font-black focus:border-emerald-500 outline-none" value={section.h} onChange={e => setSection({...section, h: e.target.value})} /></div>
+                                        <div className="space-y-1"><label className="text-[10px] uppercase font-black text-slate-500">f'c (kg/cm²)</label><input type="number" className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl p-3 font-black focus:border-emerald-500 outline-none" value={materials.fc} onChange={e => setMaterials({...materials, fc: e.target.value})} /></div>
+                                        <div className="space-y-1"><label className="text-[10px] uppercase font-black text-slate-500">fy (kg/cm²)</label><input type="number" className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl p-3 font-black focus:border-emerald-500 outline-none" value={materials.fy} onChange={e => setMaterials({...materials, fy: e.target.value})} /></div>
+                                        <div className="col-span-2 space-y-1"><label className="text-[10px] uppercase font-black text-slate-500">Recubrimiento (cm)</label><input type="number" className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl p-3 font-black focus:border-emerald-500 outline-none" value={section.rec} step="0.5" onChange={e => setSection({...section, rec: e.target.value})} /></div>
+                                    </div>
+                                </div>
+                                <div className="bg-white rounded-[2rem] p-8 space-y-6 border shadow-sm">
+                                    <h2 className="font-black text-emerald-600 uppercase text-[9px] tracking-widest border-b border-slate-100 pb-2 uppercase">Refuerzo Longitudinal</h2>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="space-y-1"><label className="text-[10px] uppercase text-slate-500 font-black">Cantidad</label><input type="number" className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl p-3 font-black focus:border-emerald-500 outline-none" value={reinforcement.count} onChange={e => setReinforcement({...reinforcement, count: e.target.value})} /></div>
+                                        <div className="space-y-1"><label className="text-[10px] uppercase text-slate-500 font-black">Diámetro</label>
+                                            <select className="w-full bg-slate-50 border-2 border-slate-100 rounded-xl p-3 font-black focus:border-emerald-500 outline-none" value={reinforcement.barIndex} onChange={e => setReinforcement({...reinforcement, barIndex: parseInt(e.target.value)})}>
+                                                {BAR_SIZES.map((b, i) => <option key={i} value={i} className="text-slate-800 font-bold bg-white">{b.label}</option>)}
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="lg:col-span-8 space-y-8 text-slate-800 font-bold">
+                                <div className="bg-emerald-600 rounded-[2.5rem] p-8 text-white flex flex-col md:flex-row items-center gap-10 shadow-2xl border-b-[12px] border-emerald-800">
+                                    <div className="flex-grow space-y-2">
+                                        <label className="text-[10px] font-black text-emerald-100 uppercase tracking-widest">Momento Último Mu Solicitado (ton-m)</label>
+                                        <input type="number" step="0.5" className="bg-emerald-700 border-none rounded-2xl p-4 text-4xl font-black w-full outline-none focus:bg-emerald-800 shadow-inner" value={load.mu} onChange={e => setLoad({ mu: e.target.value })} />
+                                    </div>
+                                    <div className="hidden md:block bg-emerald-500 p-5 rounded-3xl border-2 border-emerald-400 shadow-inner"><Icon name="zap" size={32} /></div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                    <div className="bg-white p-8 rounded-[2rem] border h-[450px] flex flex-col shadow-sm">
+                                        <h3 className="font-black text-[10px] text-slate-400 uppercase mb-4 tracking-widest flex items-center gap-2"><Icon name="arrow-down-wide-narrow" size={14} /> Deformaciones ε (x10⁻³)</h3>
+                                        <div className="flex-grow relative text-slate-800"><canvas ref={strainChartRef}></canvas></div>
+                                    </div>
+                                    <div className="bg-white p-8 rounded-[2rem] border h-[450px] flex flex-col shadow-sm">
+                                        <h3 className="font-black text-[10px] text-emerald-600 uppercase mb-4 tracking-widest flex items-center gap-2"><Icon name="trending-up" size={14} /> Momento-Curvatura (rad/m)</h3>
+                                        <div className="flex-grow relative text-slate-800"><canvas ref={mPhiChartRef}></canvas></div>
+                                    </div>
+                                </div>
+
+                                {results && (
+                                    <div className="bg-white rounded-[2rem] p-8 border shadow-sm space-y-8">
+                                        <h2 className="font-black text-slate-800 uppercase text-[10px] tracking-widest border-b pb-2 uppercase">Cuadro de Valores Críticos</h2>
+                                        <table className="w-full text-left text-xs border-collapse rounded-xl overflow-hidden border">
+                                            <thead>
+                                                <tr className="bg-slate-50 text-slate-500 uppercase font-black tracking-tight">
+                                                    <th className="p-3 border">Etapa</th>
+                                                    <th className="p-3 border">Curvatura φ (rad/m)</th>
+                                                    <th className="p-3 border text-blue-600">Momento M (t-m)</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y text-slate-800 font-bold">
+                                                <tr><td className="p-3 border">Agrietamiento (cr)</td><td className="p-3 border font-mono">{(results.phi_cr * results.scaleMphi).toFixed(5)}</td><td className="p-3 border text-blue-600">{results.Mcr.toFixed(2)}</td></tr>
+                                                <tr className="bg-blue-50/10"><td className="p-3 border">Fluencia (y)</td><td className="p-3 border font-mono">{(results.phi_y * results.scaleMphi).toFixed(5)}</td><td className="p-3 border text-blue-600">{results.My.toFixed(2)}</td></tr>
+                                                <tr className="bg-emerald-50/10"><td className="p-3 border">Estado Último (u)</td><td className="p-3 border font-mono">{(results.phi_u * results.scaleMphi).toFixed(5)}</td><td className="p-3 border text-emerald-600">{results.Mn.toFixed(2)}</td></tr>
+                                            </tbody>
+                                        </table>
+                                        
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
+                                            <div className="p-4 bg-slate-50 rounded-2xl"><p className="text-[10px] text-slate-400 mb-1 uppercase">Ductilidad μφ</p><p className="text-3xl font-black text-emerald-600">{results.mu_phi.toFixed(2)}</p></div>
+                                            <div className="p-4 bg-slate-50 rounded-2xl"><p className="text-[10px] text-slate-400 mb-1 uppercase">φ Diseño</p><p className="text-3xl font-black text-slate-800">{results.phi_red.toFixed(3)}</p></div>
+                                            <div className="p-4 bg-slate-50 rounded-2xl"><p className="text-[10px] text-slate-400 mb-1 uppercase">φMn (t-m)</p><p className="text-3xl font-black text-blue-600">{results.Md.toFixed(2)}</p></div>
+                                            <div className={`p-4 rounded-2xl ${results.isSafe ? 'bg-emerald-100' : 'bg-rose-100'}`}><p className="text-[10px] text-slate-500 mb-1 uppercase uppercase tracking-tighter">Ratio D/C</p><p className={`text-3xl font-black ${results.isSafe ? 'text-emerald-700' : 'text-rose-700'}`}>{(results.mu_sol / results.Md).toFixed(2)}</p></div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
