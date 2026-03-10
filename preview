@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memoria Técnica Interactiva - ACI 318</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+            height: 350px;
+            max-height: 400px;
+        }
+        .canvas-container {
+            position: relative;
+            width: 100%;
+            max-width: 400px;
+            margin-left: auto;
+            margin-right: auto;
+            height: 400px;
+        }
+        .view-section { display: none; }
+        .view-section.active { display: block; animation: fadeIn 0.4s; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .math-block { background-color: #f8fafc; border-left: 4px solid #0284c7; padding: 1rem; border-radius: 0.25rem; font-family: monospace; font-size: 1.1rem; }
+    </style>
+</head>
+<body class="bg-stone-50 text-stone-800 flex flex-col md:flex-row min-h-screen">
+
+    <!-- Chosen Palette: Warm Neutrals with Sky Blue Accents (bg-stone-50, text-stone-800, border-stone-200, bg-sky-600 for actions, bg-sky-50 for highlights) -->
+    
+    <!-- Application Structure Plan: A dashboard-style layout with a fixed sidebar for navigation and a main content area. This structure allows users to logically step through the theoretical concepts (Hypotheses -> Parameters -> Procedure -> Factors) without being overwhelmed by a massive wall of text. Interactive elements (sliders and dynamic charts) are placed immediately alongside the corresponding theory to reinforce learning through exploration. -->
+    
+    <!-- Visualization & Content Choices: 
+         - Material Parameters (Beta1): Line chart (Chart.js) + Slider. Goal: Show the step-wise function of Beta1 based on f'c. Justification: Visualizing the plateau and slope helps understand the ACI 318 rule instantly.
+         - Strain Compatibility: HTML5 Canvas drawing + Slider. Goal: Illustrate how varying the neutral axis depth (c) changes the strain in steel. Justification: A geometric representation of "plane sections remain plane" is the most effective way to teach strain compatibility. NO SVG used.
+         - Phi Factors: Line chart (Chart.js). Goal: Show the transition of the reduction factor. Justification: The piecewise function is best understood visually. 
+    -->
+    
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+
+    <nav class="w-full md:w-64 bg-stone-900 text-stone-100 flex-shrink-0 flex flex-col shadow-xl z-10 sticky top-0 md:h-screen">
+        <div class="p-6 border-b border-stone-800">
+            <h1 class="text-xl font-bold text-sky-400 tracking-tight">Memoria ACI 318</h1>
+            <p class="text-xs text-stone-400 mt-1 uppercase tracking-widest">Análisis Interactivo</p>
+        </div>
+        <div class="flex-grow overflow-y-auto py-4 flex flex-col gap-1 px-3">
+            <button class="nav-btn text-left px-4 py-3 rounded-lg transition-colors bg-sky-600 text-white font-semibold" data-target="hipotesis">1. Hipótesis de Diseño</button>
+            <button class="nav-btn text-left px-4 py-3 rounded-lg transition-colors hover:bg-stone-800 text-stone-300" data-target="parametros">2. Parámetros (&#946;&#8321;)</button>
+            <button class="nav-btn text-left px-4 py-3 rounded-lg transition-colors hover:bg-stone-800 text-stone-300" data-target="procedimiento">3. Procedimiento y Esfuerzos</button>
+            <button class="nav-btn text-left px-4 py-3 rounded-lg transition-colors hover:bg-stone-800 text-stone-300" data-target="factores">4. Puntos Singulares y Factor &#981;</button>
+        </div>
+    </nav>
+
+    <main class="flex-grow p-6 md:p-12 overflow-y-auto w-full">
+        
+        <section id="hipotesis" class="view-section active max-w-4xl mx-auto">
+            <h2 class="text-3xl font-bold text-stone-900 mb-4 border-b pb-2 border-stone-200">1. Hipótesis de Diseño</h2>
+            <p class="text-stone-600 mb-8 text-lg leading-relaxed">
+                Esta sección establece los fundamentos teóricos para el diseño por resistencia de columnas de concreto armado. Aquí se presentan las reglas básicas que rigen el comportamiento conjunto del acero y el concreto, esenciales para comprender el resto de la memoria de cálculo.
+            </p>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-stone-200 hover:shadow-md transition-shadow">
+                    <div class="text-2xl mb-2">&#128207;</div>
+                    <h3 class="font-bold text-lg text-sky-700 mb-2">Compatibilidad de Deformaciones</h3>
+                    <p class="text-stone-600 text-sm">Las deformaciones en el acero y el concreto son directamente proporcionales a su distancia al eje neutro. Esto significa que las secciones planas antes de la flexión permanecen planas después de la flexión.</p>
+                </div>
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-stone-200 hover:shadow-md transition-shadow">
+                    <div class="text-2xl mb-2">&#129704;</div>
+                    <h3 class="font-bold text-lg text-sky-700 mb-2">Resistencia del Concreto</h3>
+                    <p class="text-stone-600 text-sm">Se asume que la falla del concreto ocurre cuando la fibra extrema sometida a compresión alcanza una deformación máxima útil definida normativamente como <strong>&#949;<sub>u</sub> = 0.003</strong>.</p>
+                </div>
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-stone-200 hover:shadow-md transition-shadow">
+                    <div class="text-2xl mb-2">&#9875;</div>
+                    <h3 class="font-bold text-lg text-sky-700 mb-2">Esfuerzo del Acero</h3>
+                    <p class="text-stone-600 text-sm">El esfuerzo se calcula mediante la Ley de Hooke (f<sub>s</sub> = E<sub>s</sub> &middot; &#949;<sub>s</sub>), limitándose al esfuerzo de fluencia (f<sub>y</sub>). El módulo de elasticidad es <strong>E<sub>s</sub> = 2,000,000 kg/cm&sup2;</strong>.</p>
+                </div>
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-stone-200 hover:shadow-md transition-shadow">
+                    <div class="text-2xl mb-2">&#128306;</div>
+                    <h3 class="font-bold text-lg text-sky-700 mb-2">Bloque de Whitney</h3>
+                    <p class="text-stone-600 text-sm">Para simplificar el cálculo manual y analítico, la distribución parabólica real de esfuerzos de compresión en el concreto se reemplaza por un bloque rectangular equivalente de tensiones.</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="parametros" class="view-section max-w-4xl mx-auto">
+            <h2 class="text-3xl font-bold text-stone-900 mb-4 border-b pb-2 border-stone-200">2. Parámetros del Material (Bloque &#946;&#8321;)</h2>
+            <p class="text-stone-600 mb-8 text-lg leading-relaxed">
+                El factor &#946;&#8321; es crucial para definir la profundidad del bloque rectangular equivalente de compresión (a = &#946;&#8321; &middot; c). En esta sección interactiva, puedes explorar cómo la resistencia a la compresión del concreto (f'c) altera este parámetro normativo.
+            </p>
+
+            <div class="bg-white p-8 rounded-2xl shadow-sm border border-stone-200 mb-8">
+                <div class="flex flex-col md:flex-row gap-8 items-center">
+                    <div class="w-full md:w-1/3 space-y-6">
+                        <div>
+                            <label class="block text-sm font-bold text-stone-500 uppercase tracking-wide mb-2">Ajustar Resistencia f'c (kg/cm&sup2;)</label>
+                            <input type="range" id="fcSlider" min="150" max="700" step="10" value="210" class="w-full h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer accent-sky-600">
+                            <div class="mt-4 text-center">
+                                <span class="text-4xl font-black text-stone-800" id="fcValDisplay">210</span>
+                                <span class="text-stone-500">kg/cm&sup2;</span>
+                            </div>
+                        </div>
+                        <div class="bg-sky-50 p-4 rounded-xl border border-sky-100 text-center">
+                            <span class="block text-xs font-bold text-sky-600 uppercase mb-1">Factor Calculado &#946;&#8321;</span>
+                            <span class="text-3xl font-black text-sky-800" id="betaValDisplay">0.850</span>
+                        </div>
+                    </div>
+                    <div class="w-full md:w-2/3">
+                        <div class="chart-container">
+                            <canvas id="betaChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-6 math-block text-sm">
+                    Si f'c &le; 280 &rArr; &#946;&#8321; = 0.85 <br>
+                    Si f'c &ge; 560 &rArr; &#946;&#8321; = 0.65 <br>
+                    Intermedios: &#946;&#8321; = 0.85 - [0.05 &middot; (f'c - 280) / 70]
+                </div>
+            </div>
+        </section>
+
+        <section id="procedimiento" class="view-section max-w-5xl mx-auto">
+            <h2 class="text-3xl font-bold text-stone-900 mb-4 border-b pb-2 border-stone-200">3. Procedimiento y Compatibilidad</h2>
+            <p class="text-stone-600 mb-8 text-lg leading-relaxed">
+                El corazón de la iteración para el diagrama es el análisis de compatibilidad de deformaciones. Al variar la profundidad del eje neutro (c), cambian las deformaciones en el acero y el concreto, lo que a su vez modifica las fuerzas internas de la sección.
+            </p>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+                <div class="space-y-6">
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-stone-200">
+                        <h3 class="font-bold text-stone-800 mb-3 border-b pb-2">A. Deformaciones y Esfuerzos</h3>
+                        <p class="text-sm text-stone-600 mb-3">Para cada capa de acero ubicada a una profundidad d<sub>i</sub>, la deformación se obtiene por semejanza de triángulos:</p>
+                        <div class="math-block mb-3">&#949;<sub>si</sub> = 0.003 &middot; (c - d<sub>i</sub>) / c</div>
+                        <div class="math-block">f<sub>si</sub> = max(-f<sub>y</sub>, min(f<sub>y</sub>, E<sub>s</sub> &middot; &#949;<sub>si</sub>))</div>
+                    </div>
+
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-stone-200">
+                        <h3 class="font-bold text-stone-800 mb-3 border-b pb-2">B. Equilibrio Interno</h3>
+                        <p class="text-sm text-stone-600 mb-3">Las fuerzas internas definen la carga axial (P<sub>n</sub>) y el momento flector (M<sub>n</sub>) resistente:</p>
+                        <div class="math-block mb-3">
+                            Compresión Concreto: C<sub>c</sub> = 0.85 &middot; f'c &middot; b &middot; a
+                        </div>
+                        <div class="math-block mb-3">
+                            Carga Axial: P<sub>n</sub> = C<sub>c</sub> + &Sigma; (A<sub>si</sub> &middot; f<sub>si</sub>)
+                        </div>
+                        <div class="math-block text-xs">
+                            Momento: M<sub>n</sub> = C<sub>c</sub> &middot; (h/2 - a/2) + &Sigma; [A<sub>si</sub> &middot; f<sub>si</sub> &middot; (h/2 - d<sub>i</sub>)]
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-stone-800 p-6 rounded-2xl shadow-lg text-white flex flex-col items-center">
+                    <h3 class="font-bold text-sky-400 mb-4 w-full text-center uppercase tracking-widest text-sm">Simulador de Eje Neutro</h3>
+                    <div class="w-full px-4 mb-6">
+                        <label class="block text-xs font-bold text-stone-400 mb-2">Profundidad Eje Neutro (c) = <span id="cValDisplay" class="text-white text-lg">25</span> cm</label>
+                        <input type="range" id="cSlider" min="5" max="60" step="1" value="25" class="w-full h-2 bg-stone-600 rounded-lg appearance-none cursor-pointer accent-sky-400">
+                    </div>
+                    <div class="canvas-container bg-stone-900 rounded-xl border border-stone-700 overflow-hidden">
+                        <canvas id="strainCanvas" width="400" height="400"></canvas>
+                    </div>
+                    <p class="text-[10px] text-stone-400 mt-4 text-center px-4">Representación visual de la deformación unitaria (&#949;). Note cómo el acero inferior pasa de tracción a compresión al aumentar 'c'. Sección asumida: h=60cm, d=54cm.</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="factores" class="view-section max-w-4xl mx-auto">
+            <h2 class="text-3xl font-bold text-stone-900 mb-4 border-b pb-2 border-stone-200">4. Puntos Singulares y Resistencia de Diseño</h2>
+            <p class="text-stone-600 mb-8 text-lg leading-relaxed">
+                El diagrama final depende de condiciones críticas (compresión pura, falla balanceada) y de la aplicación de factores de reducción de resistencia (&#981;) dictados por la norma, los cuales penalizan secciones que fallan frágilmente.
+            </p>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-stone-200">
+                    <h3 class="font-bold text-sky-700 mb-2 text-lg">Compresión Pura (P<sub>0</sub>)</h3>
+                    <p class="text-sm text-stone-600 mb-3">Es la capacidad axial máxima de la columna cuando la excentricidad es nula.</p>
+                    <div class="math-block text-sm">P<sub>0</sub> = 0.85 &middot; f'c &middot; (A<sub>g</sub> - A<sub>st</sub>) + A<sub>st</sub> &middot; f<sub>y</sub></div>
+                </div>
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-stone-200">
+                    <h3 class="font-bold text-sky-700 mb-2 text-lg">Falla Balanceada (c<sub>bal</sub>)</h3>
+                    <p class="text-sm text-stone-600 mb-3">Ocurre simultáneamente el aplastamiento del concreto (&#949;=0.003) y la fluencia del acero extremo.</p>
+                    <div class="math-block text-sm">c<sub>bal</sub> = [0.003 / (0.003 + f<sub>y</sub>/E<sub>s</sub>)] &middot; d<sub>ext</sub></div>
+                </div>
+            </div>
+
+            <div class="bg-white p-8 rounded-2xl shadow-sm border border-stone-200">
+                <h3 class="font-bold text-stone-800 mb-4 text-xl">Factor de Reducción &#981; (ACI 318)</h3>
+                <p class="text-sm text-stone-600 mb-6">El factor &#981; se calcula en función de la deformación neta de tracción (&#949;<sub>t</sub>) en la capa extrema de acero. Valores bajos de deformación indican falla por compresión (frágil, &#981;=0.65), mientras que valores altos indican falla por flexión (dúctil, &#981;=0.90).</p>
+                
+                <div class="chart-container mb-6">
+                    <canvas id="phiChart"></canvas>
+                </div>
+
+                <div class="bg-amber-50 border border-amber-200 p-4 rounded-lg">
+                    <strong class="text-amber-800 text-sm block mb-1">Verificación de Seguridad y Límite Máximo</strong>
+                    <p class="text-xs text-amber-700">Por normatividad ante excentricidades accidentales, la carga máxima de diseño se trunca horizontalmente en el diagrama a un valor de <strong>&#981;P<sub>n,max</sub> = 0.80 &middot; &#981; &middot; P<sub>0</sub></strong> (para columnas con estribos). Un diseño es seguro si la carga solicitante (M<sub>u</sub>, P<sub>u</sub>) cae dentro del área delimitada por esta curva ajustada.</p>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <script>
+        const state = {
+            fc: 210,
+            fy: 4200,
+            es: 2000000,
+            cVal: 25,
+            h: 60,
+            d: 54 
+        };
+
+        const elements = {
+            navBtns: document.querySelectorAll('.nav-btn'),
+            sections: document.querySelectorAll('.view-section'),
+            fcSlider: document.getElementById('fcSlider'),
+            fcValDisplay: document.getElementById('fcValDisplay'),
+            betaValDisplay: document.getElementById('betaValDisplay'),
+            cSlider: document.getElementById('cSlider'),
+            cValDisplay: document.getElementById('cValDisplay'),
+            betaCanvas: document.getElementById('betaChart'),
+            phiCanvas: document.getElementById('phiChart'),
+            strainCanvas: document.getElementById('strainCanvas')
+        };
+
+        let betaChartInst = null;
+        let phiChartInst = null;
+
+        function initNav() {
+            elements.navBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    elements.navBtns.forEach(b => {
+                        b.classList.remove('bg-sky-600', 'text-white', 'font-semibold');
+                        b.classList.add('hover:bg-stone-800', 'text-stone-300');
+                    });
+                    btn.classList.remove('hover:bg-stone-800', 'text-stone-300');
+                    btn.classList.add('bg-sky-600', 'text-white', 'font-semibold');
+
+                    const targetId = btn.getAttribute('data-target');
+                    elements.sections.forEach(sec => sec.classList.remove('active'));
+                    document.getElementById(targetId).classList.add('active');
+                    
+                    if(targetId === 'factores') updatePhiChart();
+                });
+            });
+        }
+
+        function calcBeta1(fc) {
+            if (fc <= 280) return 0.85;
+            if (fc >= 560) return 0.65;
+            return 0.85 - (0.05 * (fc - 280) / 70);
+        }
+
+        function initBetaChart() {
+            const dataPts = [];
+            for(let i=150; i<=700; i+=10) {
+                dataPts.push({x: i, y: calcBeta1(i)});
+            }
+
+            betaChartInst = new Chart(elements.betaCanvas, {
+                type: 'line',
+                data: {
+                    datasets: [{
+                        label: 'Valor de β1',
+                        data: dataPts,
+                        borderColor: '#94a3b8',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        fill: false,
+                        tension: 0
+                    }, {
+                        label: 'Selección Actual',
+                        data: [{x: state.fc, y: calcBeta1(state.fc)}],
+                        backgroundColor: '#0284c7',
+                        borderColor: '#fff',
+                        borderWidth: 2,
+                        pointRadius: 8,
+                        pointHoverRadius: 10
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { title: { display: true, text: "Resistencia f'c (kg/cm²)" }, type: 'linear', min: 150, max: 700 },
+                        y: { title: { display: true, text: 'Factor β1' }, min: 0.60, max: 0.90 }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        function updateBetaSection() {
+            state.fc = parseInt(elements.fcSlider.value);
+            const beta = calcBeta1(state.fc);
+            
+            elements.fcValDisplay.textContent = state.fc;
+            elements.betaValDisplay.textContent = beta.toFixed(3);
+
+            if(betaChartInst) {
+                betaChartInst.data.datasets[1].data = [{x: state.fc, y: beta}];
+                betaChartInst.update();
+            }
+        }
+
+        function drawStrainProfile() {
+            const ctx = elements.strainCanvas.getContext('2d');
+            const w = elements.strainCanvas.width;
+            const h = elements.strainCanvas.height;
+            
+            ctx.clearRect(0, 0, w, h);
+
+            const pad = 40;
+            const colW = 80;
+            const colH = h - 2*pad;
+            const colX = pad;
+            const colY = pad;
+
+            const ey = state.fy / state.es; 
+            const realC = state.cVal; 
+            const ratio = colH / state.h; 
+            const drawC = realC * ratio;
+            const drawD = state.d * ratio;
+
+            ctx.fillStyle = '#292524';
+            ctx.fillRect(colX, colY, colW, colH);
+            
+            ctx.fillStyle = '#44403c';
+            ctx.beginPath();
+            ctx.arc(colX + 20, colY + 20, 5, 0, Math.PI*2);
+            ctx.arc(colX + colW - 20, colY + 20, 5, 0, Math.PI*2);
+            ctx.fill();
+            
+            ctx.fillStyle = '#38bdf8'; 
+            ctx.beginPath();
+            ctx.arc(colX + 20, colY + drawD, 5, 0, Math.PI*2);
+            ctx.arc(colX + colW - 20, colY + drawD, 5, 0, Math.PI*2);
+            ctx.fill();
+
+            const naY = colY + drawC;
+            ctx.strokeStyle = '#a8a29e';
+            ctx.setLineDash([5, 5]);
+            ctx.beginPath();
+            ctx.moveTo(colX - 10, naY);
+            ctx.lineTo(w - pad, naY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            ctx.fillStyle = '#a8a29e';
+            ctx.font = '12px Inter';
+            ctx.fillText('Eje Neutro (c)', w - pad - 80, naY - 5);
+
+            const strainAxisX = colX + colW + 60;
+            ctx.strokeStyle = '#57534e';
+            ctx.beginPath();
+            ctx.moveTo(strainAxisX, colY);
+            ctx.lineTo(strainAxisX, colY + colH);
+            ctx.stroke();
+
+            const maxStrainW = 80; 
+            const concStrainX = strainAxisX + maxStrainW; 
+            
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(concStrainX, colY); 
+            
+            const realStrainSteel = 0.003 * (realC - state.d) / realC;
+            
+            const steelStrainX = strainAxisX + (realStrainSteel / 0.003) * maxStrainW;
+
+            ctx.lineTo(strainAxisX, naY);
+            ctx.lineTo(steelStrainX, colY + drawD);
+            ctx.stroke();
+
+            ctx.fillStyle = '#38bdf8';
+            ctx.fillText('ε_c = 0.003', concStrainX + 5, colY + 10);
+            
+            ctx.beginPath();
+            ctx.moveTo(strainAxisX, colY);
+            ctx.lineTo(concStrainX, colY);
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.moveTo(strainAxisX, colY + drawD);
+            ctx.lineTo(steelStrainX, colY + drawD);
+            ctx.stroke();
+
+            ctx.fillText(`ε_s = ${realStrainSteel.toFixed(4)}`, steelStrainX + (realStrainSteel > 0 ? 5 : -70), colY + drawD + (realStrainSteel > 0 ? 15 : -5));
+        }
+
+        function updateStrainSection() {
+            state.cVal = parseInt(elements.cSlider.value);
+            elements.cValDisplay.textContent = state.cVal;
+            drawStrainProfile();
+        }
+
+        function calcPhi(et, ey) {
+            if (et <= ey) return 0.65;
+            if (et >= 0.005) return 0.90;
+            return 0.65 + 0.25 * ((et - ey) / (0.005 - ey));
+        }
+
+        function updatePhiChart() {
+            if(!phiChartInst) {
+                const ey = state.fy / state.es;
+                const dataPts = [];
+                for(let et=0; et<=0.008; et+=0.0001) {
+                    dataPts.push({x: et, y: calcPhi(et, ey)});
+                }
+
+                phiChartInst = new Chart(elements.phiCanvas, {
+                    type: 'line',
+                    data: {
+                        datasets: [{
+                            label: 'Factor φ',
+                            data: dataPts,
+                            borderColor: '#0284c7',
+                            borderWidth: 3,
+                            pointRadius: 0,
+                            fill: true,
+                            backgroundColor: 'rgba(2, 132, 199, 0.1)'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: { 
+                                title: { display: true, text: "Deformación neta de tracción (ε_t)" }, 
+                                type: 'linear', 
+                                min: 0, 
+                                max: 0.008,
+                                grid: { color: '#f5f5f4' }
+                            },
+                            y: { 
+                                title: { display: true, text: 'Factor de Reducción φ' }, 
+                                min: 0.5, 
+                                max: 1.0,
+                                grid: { color: '#f5f5f4' }
+                            }
+                        },
+                        plugins: { 
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: { label: (ctx) => `φ = ${ctx.parsed.y.toFixed(3)}` }
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+        elements.fcSlider.addEventListener('input', updateBetaSection);
+        elements.cSlider.addEventListener('input', updateStrainSection);
+
+        window.onload = () => {
+            initNav();
+            initBetaChart();
+            updateBetaSection();
+            updateStrainSection();
+        };
+
+    </script>
+</body>
+</html>
