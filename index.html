@@ -17,10 +17,14 @@
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
         body { font-family: 'Inter', sans-serif; }
         .chart-container { position: relative; height: 520px; width: 100%; }
-        /* Personalización de scrollbar para el panel de aceros */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: #f1f1f1; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        @media print {
+            .no-print { display: none !important; }
+            body { background: white; margin: 0; padding: 20px; }
+            .report-container { border: none !important; shadow: none !important; width: 100% !important; max-width: 100% !important; }
+        }
     </style>
 </head>
 <body class="bg-slate-50">
@@ -29,12 +33,9 @@
     <script type="text/babel">
         const { useState, useMemo, useEffect, useRef } = React;
 
-        // Componente de Icono Simple para reemplazar Lucide-React en CDN
         const Icon = ({ name, size = 20, className = "" }) => {
             useEffect(() => {
-                if (window.lucide) {
-                    window.lucide.createIcons();
-                }
+                if (window.lucide) window.lucide.createIcons();
             }, [name]);
             return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
         };
@@ -56,8 +57,13 @@
                 { id: 2, d: 55, count: 3, barIndex: 2 }
             ]);
             const [load, setLoad] = useState({ mu: 15, pu: 120 });
-            const chartRef = useRef(null);
+            const [showReport, setShowReport] = useState(false);
+            
+            const mainChartRef = useRef(null);
+            const reportChartRef = useRef(null);
             const chartInstance = useRef(null);
+            const reportChartInstance = useRef(null);
+            const reportDivRef = useRef(null);
 
             const results = useMemo(() => {
                 const { b, h } = section;
@@ -67,252 +73,379 @@
                 const Ag = b * h;
                 
                 const processedLayers = layers.map(l => ({
+                    id: l.id,
+                    count: l.count,
+                    barIndex: l.barIndex,
                     d: l.d,
-                    as: l.count * BAR_SIZES[l.barIndex].area
+                    as: l.count * BAR_SIZES[l.barIndex].area,
+                    barRadius: BAR_SIZES[l.barIndex].d_mm / 20 // radio en cm
                 }));
                 const Ast = processedLayers.reduce((sum, l) => sum + l.as, 0);
 
-                const P0 = (0.85 * fc * (Ag - Ast) + Ast * fy) / 1000;
-                const Pmax = 0.80 * 0.65 * P0;
-
-                let nominal = [];
-                let design = [];
-
                 const calculatePoint = (c) => {
                     let a = Math.min(beta1 * c, h);
-                    let Cc = 0.85 * fc * b * a;
-                    let Pn = Cc;
-                    let Mn = Cc * (h / 2 - a / 2);
-                    let et_extrema = 0;
-                    const d_max = Math.max(...processedLayers.map(l => l.d));
+                    let Cc = 0, Pn = 0, Mn = 0;
                     
-                    processedLayers.forEach(layer => {
-                        const es = 0.003 * (c - layer.d) / c;
-                        const fs = Math.min(Math.max(es * Es, -fy), fy);
-                        const Fs = layer.as * fs;
-                        Pn += Fs;
-                        Mn += Fs * (h / 2 - layer.d);
-                        if (layer.d === d_max) et_extrema = Math.abs(0.003 * (d_max - c) / c);
-                    });
+                    if (c >= 10000) { 
+                        Pn = 0.85 * fc * (Ag - Ast) + Ast * fy;
+                        Mn = 0;
+                    } else if (c <= 0.001) { 
+                        Pn = -Ast * fy;
+                        Mn = 0;
+                    } else {
+                        Cc = 0.85 * fc * b * a;
+                        Pn = Cc;
+                        Mn = Cc * (h / 2 - a / 2);
+                        processedLayers.forEach(layer => {
+                            const es = 0.003 * (c - layer.d) / c;
+                            const fs = Math.min(Math.max(es * Es, -fy), fy);
+                            Pn += layer.as * fs;
+                            Mn += (layer.as * fs) * (h / 2 - layer.d);
+                        });
+                    }
 
+                    const d_max = Math.max(...processedLayers.map(l => l.d));
+                    const et_extrema = c > 0.001 ? Math.abs(0.003 * (d_max - c) / c) : 1.0;
                     let phi = 0.65;
                     if (et_extrema >= 0.005) phi = 0.90;
                     else if (et_extrema > 0.002) phi = 0.65 + (0.90 - 0.65) * (et_extrema - 0.002) / (0.005 - 0.002);
 
-                    return { Pn: Pn / 1000, Mn: Math.abs(Mn / 100000), phi };
+                    return { Pn: Pn / 1000, Mn: Math.abs(Mn / 100000), phi, c, a };
                 };
+
+                const P0_point = calculatePoint(10000);
+                const Pmax = 0.80 * 0.65 * P0_point.Pn;
 
                 const d_extremo = Math.max(...processedLayers.map(l => l.d));
                 const ey = fy / Es;
                 const c_bal = (0.003 * d_extremo) / (0.003 + ey);
+                
                 const balPoint = calculatePoint(c_bal);
+                const tracPoint = calculatePoint(0.0001);
+                const aboveBal = calculatePoint(c_bal * 1.5);
+                const belowBal = calculatePoint(c_bal * 0.5);
 
-                const steps = 120;
+                let nominal = [];
+                let design = [];
+                const steps = 150;
                 for (let i = 0; i <= steps; i++) {
-                    let c;
-                    if (i === 0) c = 0.001; 
-                    else if (i === steps) c = 10000; 
-                    else c = (h * 2 / steps) * i;
-                    const pt = calculatePoint(c);
+                    let c_val;
+                    if (i === 0) c_val = 0.0001;
+                    else if (i === steps) c_val = 10000;
+                    else if (i < steps / 2) c_val = (c_bal / (steps / 2)) * i;
+                    else c_val = c_bal + ((h * 5 - c_bal) / (steps / 2)) * (i - steps / 2);
+                    
+                    const pt = calculatePoint(c_val);
                     nominal.push({ x: pt.Mn, y: pt.Pn });
                     design.push({ x: pt.phi * pt.Mn, y: Math.min(pt.phi * pt.Pn, Pmax) });
                 }
 
-                const sortedDesign = [...design].sort((a,b) => a.y - b.y);
+                // Verificación de seguridad por intersección de Pu
                 let isSafe = false;
                 const pu = load.pu;
                 const mu = load.mu;
-                const upper = sortedDesign.find(p => p.y >= pu);
-                const lower = [...sortedDesign].reverse().find(p => p.y <= pu);
-                if (upper && lower) {
-                    const mRes = lower.x + (upper.x - lower.x) * (pu - lower.y) / (upper.y - lower.y || 1);
-                    if (mu <= mRes) isSafe = true;
-                }
+                let maxAllowedM = -1;
 
-                return { nominal, design, P0, Pmax, isSafe, balPoint };
+                for (let i = 0; i < design.length - 1; i++) {
+                    const p1 = design[i];
+                    const p2 = design[i+1];
+                    if ((p1.y <= pu && p2.y >= pu) || (p1.y >= pu && p2.y <= pu)) {
+                        const t = (Math.abs(p2.y - p1.y) < 0.0001) ? 0 : (pu - p1.y) / (p2.y - p1.y);
+                        const mAtPu = p1.x + t * (p2.x - p1.x);
+                        if (mAtPu > maxAllowedM) maxAllowedM = mAtPu;
+                    }
+                }
+                
+                if (mu <= maxAllowedM && maxAllowedM !== -1) isSafe = true;
+
+                return { nominal, design, P0: P0_point.Pn, Pmax, balPoint, tracPoint, aboveBal, belowBal, Ast, Ag, isSafe, processedLayers };
             }, [section, materials, layers, load]);
 
-            // Efecto para inicializar y actualizar el gráfico
-            useEffect(() => {
-                const ctx = chartRef.current.getContext('2d');
-                if (chartInstance.current) chartInstance.current.destroy();
-
-                chartInstance.current = new Chart(ctx, {
-                    type: 'scatter',
-                    data: {
-                        datasets: [
-                            {
-                                label: 'Nominal',
-                                data: results.nominal,
-                                borderColor: '#94a3b8',
-                                borderWidth: 1,
-                                borderDash: [4, 4],
-                                showLine: true,
-                                pointRadius: 0,
-                            },
-                            {
-                                label: 'Diseño (φ)',
-                                data: results.design,
-                                borderColor: '#2563eb',
-                                backgroundColor: 'rgba(37, 99, 235, 0.1)',
-                                borderWidth: 3,
-                                showLine: true,
-                                pointRadius: 0,
-                                fill: true,
-                            },
-                            {
-                                label: 'Falla Balanceada',
-                                data: [{ x: results.balPoint.phi * results.balPoint.Mn, y: results.balPoint.phi * results.balPoint.Pn }],
-                                backgroundColor: '#f59e0b',
-                                borderColor: '#fff',
-                                borderWidth: 2,
-                                pointRadius: 8,
-                            },
-                            {
-                                label: 'Carga Solicitante',
-                                data: [{ x: load.mu, y: load.pu }],
-                                backgroundColor: '#ef4444',
-                                borderColor: '#fff',
-                                borderWidth: 2,
-                                pointRadius: 10,
-                                pointStyle: 'rectRot',
-                            }
-                        ]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        scales: {
-                            x: { title: { display: true, text: 'Momento Flector Mu (ton-m)', font: { size: 10, weight: 'bold' } }, grid: { borderDash: [2, 2] } },
-                            y: { title: { display: true, text: 'Carga Axial Pu (ton)', font: { size: 10, weight: 'bold' } }, grid: { borderDash: [2, 2] } }
-                        },
-                        plugins: { legend: { display: false } }
-                    }
-                });
-            }, [results, load]);
-
-            const exportToCSV = () => {
-                let csvContent = "data:text/csv;charset=utf-8,";
-                csvContent += "Punto,Mn (ton-m),Pn (ton),phiMn (ton-m),phiPn (ton-m)\n";
-                const totalPoints = results.nominal.length;
-                const step = Math.floor(totalPoints / 19);
-                for(let i = 0; i < 20; i++) {
-                    const idx = Math.min(i * step, totalPoints - 1);
-                    const pt = results.nominal[idx];
-                    const dpt = results.design[idx];
-                    csvContent += `${i+1},${pt.x.toFixed(4)},${pt.y.toFixed(4)},${dpt.x.toFixed(4)},${dpt.y.toFixed(4)}\n`;
-                }
-                const encodedUri = encodeURI(csvContent);
-                const link = document.createElement("a");
-                link.setAttribute("href", encodedUri);
-                link.setAttribute("download", "20_puntos_diagrama.csv");
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-            };
+            const drawScale = 240 / (Math.max(section.b, section.h) + 20);
 
             const addLayer = () => setLayers([...layers, { id: Date.now(), d: section.h / 2, count: 2, barIndex: 2 }]);
             const removeLayer = (id) => layers.length > 1 && setLayers(layers.filter(l => l.id !== id));
             const updateLayer = (id, key, val) => setLayers(layers.map(l => l.id === id ? { ...l, [key]: val } : l));
 
-            const drawScale = 240 / (Math.max(section.b, section.h) + 20);
+            const renderChart = (canvasRef, instanceRef) => {
+                if (!canvasRef.current) return;
+                const ctx = canvasRef.current.getContext('2d');
+                if (instanceRef.current) instanceRef.current.destroy();
+                instanceRef.current = new Chart(ctx, {
+                    type: 'scatter',
+                    data: {
+                        datasets: [
+                            { label: 'Nominal', data: results.nominal, borderColor: '#94a3b8', borderWidth: 1, borderDash: [4, 4], showLine: true, pointRadius: 0 },
+                            { label: 'Diseño (φ)', data: results.design, borderColor: '#2563eb', backgroundColor: 'rgba(37, 99, 235, 0.1)', borderWidth: 3, showLine: true, pointRadius: 0, fill: true },
+                            { label: 'Balanceado', data: [{ x: results.balPoint.phi * results.balPoint.Mn, y: results.balPoint.phi * results.balPoint.Pn }], backgroundColor: '#f59e0b', pointRadius: 8 },
+                            { label: 'Carga Solicitante', data: [{ x: load.mu, y: load.pu }], backgroundColor: '#ef4444', pointRadius: 10, pointStyle: 'rectRot', borderColor: '#fff', borderWidth: 2 }
+                        ]
+                    },
+                    options: { 
+                        responsive: true, 
+                        maintainAspectRatio: false, 
+                        animation: false,
+                        scales: { x: { title: { display: true, text: 'Momento Mu (ton-m)', font: { weight: 'bold' } } }, y: { title: { display: true, text: 'Carga Axial Pu (ton)', font: { weight: 'bold' } } } }, 
+                        plugins: { legend: { display: false } } 
+                    }
+                });
+            };
+
+            useEffect(() => {
+                if (!showReport) renderChart(mainChartRef, chartInstance);
+            }, [results, load, showReport]);
+
+            useEffect(() => {
+                if (showReport) renderChart(reportChartRef, reportChartInstance);
+            }, [showReport]);
+
+            const downloadHTMLReport = () => {
+                const reportContent = reportDivRef.current.innerHTML;
+                const chartImg = reportChartRef.current.toDataURL("image/png");
+                
+                const finalHtml = `
+                    <!DOCTYPE html>
+                    <html lang="es">
+                    <head>
+                        <meta charset="UTF-8">
+                        <title>Memoria de Cálculo Estructural</title>
+                        <script src="https://cdn.tailwindcss.com"><\/script>
+                        <style>
+                            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+                            body { font-family: 'Inter', sans-serif; padding: 40px; background: white; }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="max-w-4xl mx-auto border-2 border-slate-100 p-10 rounded-3xl shadow-xl">
+                            ${reportContent.replace(/<canvas.*<\/canvas>/, `<img src="${chartImg}" class="w-full h-auto" />`)}
+                        </div>
+                    </body>
+                    </html>
+                `;
+                const blob = new Blob([finalHtml], { type: 'text/html' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `Memoria_Columna_${section.b}x${section.h}.html`;
+                a.click();
+            };
+
+            const SectionSVG = ({ isReport = false }) => (
+                <svg width={isReport ? "200" : "100%"} height={isReport ? "280" : "100%"} 
+                     viewBox={`-35 -45 ${section.b * drawScale + 70} ${section.h * drawScale + 90}`} 
+                     className="drop-shadow-xl overflow-visible">
+                    {/* Concreto */}
+                    <rect x="0" y="0" width={section.b * drawScale} height={section.h * drawScale} fill="#cbd5e1" stroke="#64748b" strokeWidth="2" />
+                    {/* Estribo (recubrimiento) */}
+                    <rect x={section.rec * drawScale} y={section.rec * drawScale} 
+                          width={(section.b - 2 * section.rec) * drawScale} 
+                          height={(section.h - 2 * section.rec) * drawScale} 
+                          fill="none" stroke="#94a3b8" strokeWidth="1.5" strokeDasharray="4" />
+                    {/* Cotas */}
+                    <text x={(section.b * drawScale) / 2} y="-22" textAnchor="middle" fontSize="14" fill="#475569" fontWeight="bold">b={section.b} cm</text>
+                    <text x="-22" y={(section.h * drawScale) / 2} textAnchor="middle" fontSize="14" fill="#475569" fontWeight="bold" transform={`rotate(-90, -22, ${(section.h * drawScale) / 2})`}>h={section.h} cm</text>
+                    
+                    {/* Varillas ajustadas al interior del recubrimiento (tangentes al estribo) */}
+                    {results.processedLayers.map((layer) => {
+                        const posY = layer.d * drawScale;
+                        
+                        // Escala visual del diámetro
+                        const r_px = (BAR_SIZES[layer.barIndex].d_mm / 20) * drawScale;
+                        
+                        // Los límites horizontales para el centro de la varilla 
+                        // para que queden por dentro del recubrimiento
+                        const startX = (section.rec + layer.barRadius) * drawScale;
+                        const endX = (section.b - section.rec - layer.barRadius) * drawScale;
+                        const innerWidth = endX - startX;
+                        
+                        return Array.from({ length: layer.count }).map((_, i) => {
+                            const posX = layer.count > 1 
+                                ? startX + (i * innerWidth / (layer.count - 1)) 
+                                : (section.b * drawScale) / 2;
+                            return <circle key={`${layer.id}-${i}`} cx={posX} cy={posY} r={Math.max(r_px, 3)} fill="#1e293b" />;
+                        });
+                    })}
+                </svg>
+            );
+
+            if (showReport) {
+                return (
+                    <div className="min-h-screen bg-slate-100 py-10 px-4">
+                        <div className="max-w-4xl mx-auto flex justify-between items-center mb-4 no-print">
+                            <button onClick={() => setShowReport(false)} className="flex items-center gap-2 text-slate-500 font-bold hover:text-slate-800 transition-colors">
+                                <Icon name="arrow-left" size={18} /> Volver al Editor
+                            </button>
+                            <button onClick={downloadHTMLReport} className="bg-emerald-600 text-white px-6 py-3 rounded-2xl font-black flex items-center gap-2 hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all active:scale-95">
+                                <Icon name="download" size={20} /> Descargar Memoria HTML
+                            </button>
+                        </div>
+                        
+                        <div ref={reportDivRef} className="bg-white p-12 max-w-4xl mx-auto border-2 border-slate-100 shadow-2xl rounded-[2.5rem] report-container">
+                            <header className="border-b-4 border-slate-900 pb-8 mb-10 flex justify-between items-start">
+                                <div>
+                                    <h1 className="text-4xl font-black text-slate-900 tracking-tighter uppercase mb-2">Memoria de Cálculo</h1>
+                                    <p className="text-blue-600 font-black text-sm tracking-[0.2em] uppercase">Diseño de Columna Rectangular - Norma ACI 318</p>
+                                </div>
+                                <div className="text-right">
+                                    <p className="text-[10px] font-black text-slate-400 uppercase">Fecha de emisión</p>
+                                    <p className="font-bold text-slate-700">{new Date().toLocaleDateString()}</p>
+                                </div>
+                            </header>
+
+                            <div className="space-y-12">
+                                <div className="grid grid-cols-2 gap-12 items-center">
+                                    <div className="space-y-6">
+                                        <h2 className="font-black text-slate-400 text-xs uppercase tracking-[0.3em] border-b-2 border-slate-100 pb-2">1. Definición de Sección</h2>
+                                        <div className="grid grid-cols-2 gap-y-3 text-sm text-slate-800">
+                                            <span className="text-slate-500 font-medium">Base de columna (b):</span> <span className="font-bold">{section.b} cm</span>
+                                            <span className="text-slate-500 font-medium">Peralte total (h):</span> <span className="font-bold">{section.h} cm</span>
+                                            <span className="text-slate-500 font-medium">Resistencia f'c:</span> <span className="font-bold">{materials.fc} kg/cm²</span>
+                                            <span className="text-slate-500 font-medium">Fluencia fy:</span> <span className="font-bold">{materials.fy} kg/cm²</span>
+                                            <span className="text-slate-500 font-medium">Recubrimiento:</span> <span className="font-bold">{section.rec} cm</span>
+                                            <span className="text-slate-500 font-medium">Acero Total (Ast):</span> <span className="font-bold text-blue-600">{results.Ast.toFixed(2)} cm²</span>
+                                            <span className="text-slate-500 font-medium">Cuantía (ρ):</span> <span className="font-bold text-blue-600">{(results.Ast / results.Ag * 100).toFixed(2)} %</span>
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-50 p-6 rounded-[2rem] border-2 border-slate-100 flex justify-center items-center h-[320px]">
+                                        <SectionSVG isReport={true} />
+                                    </div>
+                                </div>
+
+                                <div className="space-y-4 text-slate-800">
+                                    <h2 className="font-black text-slate-400 text-xs uppercase tracking-[0.3em] border-b-2 border-slate-100 pb-2">2. Detalle de Refuerzo por Capas</h2>
+                                    <table className="w-full text-sm text-left border-collapse border border-slate-200">
+                                        <thead>
+                                            <tr className="bg-slate-100 text-slate-600 uppercase text-[10px] font-black">
+                                                <th className="p-3 border">Capa</th>
+                                                <th className="p-3 border">Cantidad</th>
+                                                <th className="p-3 border">Diámetro</th>
+                                                <th className="p-3 border">Posición d (cm)</th>
+                                                <th className="p-3 border">Área As (cm²)</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {layers.map((l, i) => (
+                                                <tr key={l.id}>
+                                                    <td className="p-3 border font-bold">#{i+1}</td>
+                                                    <td className="p-3 border">{l.count}</td>
+                                                    <td className="p-3 border">{BAR_SIZES[l.barIndex].label}</td>
+                                                    <td className="p-3 border">{l.d}</td>
+                                                    <td className="p-3 border font-bold">{(l.count * BAR_SIZES[l.barIndex].area).toFixed(2)}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                <div className="space-y-6">
+                                    <h2 className="font-black text-slate-400 text-xs uppercase tracking-[0.3em] border-b-2 border-slate-100 pb-2">3. Diagrama de Interacción Mn-Pn</h2>
+                                    <div className="h-[400px] w-full bg-white border-2 border-slate-50 rounded-3xl p-4">
+                                        <canvas ref={reportChartRef}></canvas>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <h2 className="font-black text-slate-400 text-xs uppercase tracking-[0.3em] mb-4">4. Capacidades Nominales y de Diseño</h2>
+                                    <table className="w-full text-xs text-left border border-slate-200 text-slate-800">
+                                        <thead>
+                                            <tr className="bg-slate-900 text-white uppercase tracking-tighter">
+                                                <th className="p-4 border">Estado de Falla</th>
+                                                <th className="p-4 border">c (cm)</th>
+                                                <th className="p-4 border">Pn (ton)</th>
+                                                <th className="p-4 border">Mn (ton-m)</th>
+                                                <th className="p-4 border">φ</th>
+                                                <th className="p-4 border bg-blue-700">φPn (ton)</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 font-medium">
+                                            <tr><td className="p-4 border font-bold">Compresión Pura</td><td className="p-4 border">∞</td><td className="p-4 border">{results.P0.toFixed(2)}</td><td className="p-4 border">0.00</td><td className="p-4 border">0.65</td><td className="p-4 border font-bold text-blue-700">{results.Pmax.toFixed(2)}*</td></tr>
+                                            <tr className="bg-amber-50/50"><td className="p-4 border font-bold">Falla Balanceada</td><td className="p-4 border">{results.balPoint.c.toFixed(2)}</td><td className="p-4 border">{results.balPoint.Pn.toFixed(2)}</td><td className="p-4 border">{results.balPoint.Mn.toFixed(2)}</td><td className="p-4 border">{results.balPoint.phi.toFixed(2)}</td><td className="p-4 border font-bold text-blue-700">{(results.balPoint.phi * results.balPoint.Pn).toFixed(2)}</td></tr>
+                                            <tr><td className="p-4 border font-bold">Tracción Pura</td><td className="p-4 border">0.00</td><td className="p-4 border">{results.tracPoint.Pn.toFixed(2)}</td><td className="p-4 border">0.00</td><td className="p-4 border">0.90</td><td className="p-4 border font-bold text-blue-700">{(0.9 * results.tracPoint.Pn).toFixed(2)}</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                <div className="pt-8 text-slate-800">
+                                    <h2 className="font-black text-slate-400 text-xs uppercase tracking-[0.3em] mb-4">5. Dictamen de Resistencia</h2>
+                                    <div className={`p-10 rounded-[2.5rem] border-4 flex justify-between items-center ${results.isSafe ? 'bg-emerald-50 border-emerald-200 shadow-lg shadow-emerald-50' : 'bg-rose-50 border-rose-200 shadow-lg shadow-rose-50'}`}>
+                                        <div className="space-y-2">
+                                            <p className="text-slate-500 font-black text-xs uppercase tracking-widest">Carga Solicitada: ({load.mu} t-m, {load.pu} t)</p>
+                                            <h3 className={`text-4xl font-black uppercase tracking-tighter ${results.isSafe ? 'text-emerald-700' : 'text-rose-700'}`}>
+                                                {results.isSafe ? 'DISEÑO SATISFACTORIO' : 'DISEÑO INSUFICIENTE'}
+                                            </h3>
+                                        </div>
+                                        <div className="text-right">
+                                            <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Ratio Demanda/Capacidad</p>
+                                            <p className={`text-6xl font-black ${results.isSafe ? 'text-emerald-600' : 'text-rose-600'}`}>{(load.pu / results.Pmax).toFixed(2)}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <footer className="mt-20 text-center text-[9px] text-slate-400 border-t-2 border-slate-50 pt-6 font-black uppercase tracking-[0.4em]">
+                                Generado por Motor de Análisis Estructural v2.5
+                            </footer>
+                        </div>
+                    </div>
+                );
+            }
 
             return (
-                <div className="min-h-screen p-4 md:p-6">
+                <div className="min-h-screen p-4 md:p-8">
                     <div className="max-w-7xl mx-auto">
-                        
-                        <header className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4 bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
-                            <div>
-                                <div className="flex items-center gap-2 text-blue-600 mb-0.5">
-                                    <Icon name="drafting-compass" size={20} />
-                                    <span className="font-bold uppercase text-[10px] tracking-widest">Structural Analysis v2.5</span>
+                        <header className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-6 bg-white p-6 rounded-[2rem] shadow-sm border border-slate-200">
+                            <div className="flex items-center gap-5">
+                                <div className="bg-blue-600 p-4 rounded-2xl text-white shadow-xl shadow-blue-100">
+                                    <Icon name="drafting-compass" size={28} />
                                 </div>
-                                <h1 className="text-2xl font-black text-slate-800">Diagrama de Interacción</h1>
+                                <div>
+                                    <h1 className="text-3xl font-black text-slate-800 tracking-tighter">Diagrama de Interacción</h1>
+                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-slate-400">Motor v2.5 | ACI 318</p>
+                                </div>
                             </div>
-                            <div className="flex items-center gap-3">
-                                <button onClick={exportToCSV} className="flex items-center gap-2 bg-slate-100 text-slate-700 px-4 py-2 rounded-xl text-sm font-bold hover:bg-slate-200 transition-all active:scale-95 border border-slate-200">
-                                    <Icon name="download" size={16} /> 20 Puntos CSV
+                            <div className="flex items-center gap-4">
+                                <button onClick={() => setShowReport(true)} className="flex items-center gap-2 bg-blue-600 text-white px-6 py-3 rounded-2xl font-black text-sm hover:bg-blue-700 shadow-2xl shadow-blue-200 transition-all active:scale-95">
+                                    <Icon name="file-text" size={18} /> Memoria de Cálculo
                                 </button>
-                                <div className={`px-4 py-2 rounded-xl flex items-center gap-2 font-bold shadow-sm border ${results.isSafe ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-rose-50 text-rose-700 border-rose-100'}`}>
-                                    <Icon name={results.isSafe ? "check-circle-2" : "alert-circle"} size={18} />
+                                <div className={`px-6 py-3 rounded-2xl font-black text-sm shadow-inner border tracking-tight ${results.isSafe ? 'bg-emerald-50 text-emerald-700 border-emerald-100' : 'bg-rose-50 text-rose-700 border-rose-100'}`}>
                                     {results.isSafe ? 'SECCIÓN OK' : 'FALLA'}
                                 </div>
                             </div>
                         </header>
 
-                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                            
-                            <div className="lg:col-span-4 space-y-6">
-                                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                                    <div className="bg-slate-800 p-3 text-white flex items-center gap-2">
-                                        <Icon name="eye" size={16} />
-                                        <h2 className="font-bold text-xs uppercase tracking-wider">Geometría de la Sección</h2>
-                                    </div>
-                                    <div className="p-8 bg-slate-50 flex justify-center items-center h-[360px]">
-                                        <svg width="100%" height="100%" viewBox={`-30 -40 ${section.b * drawScale + 60} ${section.h * drawScale + 80}`} className="drop-shadow-lg">
-                                            <rect x="0" y="0" width={section.b * drawScale} height={section.h * drawScale} fill="#cbd5e1" stroke="#64748b" strokeWidth="2" />
-                                            <rect x={section.rec * drawScale} y={section.rec * drawScale} width={(section.b - 2 * section.rec) * drawScale} height={(section.h - 2 * section.rec) * drawScale} fill="none" stroke="#94a3b8" strokeWidth="1.5" strokeDasharray="4" />
-                                            <line x1="0" y1="-15" x2={section.b * drawScale} y2="-15" stroke="#475569" strokeWidth="1" />
-                                            <text x={(section.b * drawScale) / 2} y="-22" textAnchor="middle" fontSize="12" fill="#475569" fontWeight="bold">b={section.b}</text>
-                                            <line x1="-15" y1="0" x2="-15" y2={section.h * drawScale} stroke="#475569" strokeWidth="1" />
-                                            <text x="-22" y={(section.h * drawScale) / 2} textAnchor="middle" fontSize="12" fill="#475569" fontWeight="bold" transform={`rotate(-90, -22, ${(section.h * drawScale) / 2})`}>h={section.h}</text>
-                                            {layers.map((layer) => {
-                                                const posY = layer.d * drawScale;
-                                                const innerWidth = (section.b - 2 * section.rec) * drawScale;
-                                                const startX = section.rec * drawScale;
-                                                return Array.from({ length: layer.count }).map((_, i) => {
-                                                    const spacing = layer.count > 1 ? innerWidth / (layer.count - 1) : 0;
-                                                    const posX = layer.count > 1 ? startX + (i * spacing) : (section.b * drawScale) / 2;
-                                                    const r = (BAR_SIZES[layer.barIndex].d_mm / 10) * drawScale * 0.5; 
-                                                    return <circle key={`${layer.id}-${i}`} cx={posX} cy={posY} r={Math.max(r, 3)} fill="#1e293b" />;
-                                                });
-                                            })}
-                                        </svg>
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                            <div className="lg:col-span-4 space-y-8">
+                                <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200 overflow-hidden">
+                                    <div className="bg-slate-800 p-4 text-white flex items-center gap-2"><Icon name="eye" size={18} /><h2 className="font-bold text-xs uppercase tracking-widest text-white">Vista Previa</h2></div>
+                                    <div className="p-8 bg-slate-50 flex justify-center items-center h-[340px]">
+                                        <SectionSVG />
                                     </div>
                                 </div>
 
-                                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 space-y-4">
-                                    <div className="flex items-center gap-2 border-b pb-2 mb-2">
-                                        <Icon name="settings" size={16} className="text-slate-400" />
-                                        <h2 className="font-bold text-xs uppercase text-slate-500">Parámetros</h2>
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-3">
-                                        <div>
-                                            <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Base (cm)</label>
-                                            <input type="number" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm" value={section.b} onChange={e => setSection({...section, b: +e.target.value})} />
-                                        </div>
-                                        <div>
-                                            <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Peralte (cm)</label>
-                                            <input type="number" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm" value={section.h} onChange={e => setSection({...section, h: +e.target.value})} />
-                                        </div>
-                                        <div>
-                                            <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">f'c (kg/cm²)</label>
-                                            <input type="number" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm" value={materials.fc} onChange={e => setMaterials({...materials, fc: +e.target.value})} />
-                                        </div>
-                                        <div>
-                                            <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">fy (kg/cm²)</label>
-                                            <input type="number" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm" value={materials.fy} onChange={e => setMaterials({...materials, fy: +e.target.value})} />
-                                        </div>
-                                        <div className="col-span-2">
-                                            <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Recubrimiento (cm)</label>
-                                            <input type="number" className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-sm" value={section.rec} onChange={e => setSection({...section, rec: +e.target.value})} />
-                                        </div>
+                                <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200 p-8 space-y-6">
+                                    <h2 className="font-black text-[10px] uppercase text-slate-400 tracking-[0.3em] border-b pb-2">Geometría y Materiales</h2>
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div className="space-y-1"><label className="text-[10px] font-black text-slate-500 uppercase">Base b (cm)</label><input type="number" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-3 font-bold focus:border-blue-500 outline-none text-slate-800" value={section.b} onChange={e => setSection({...section, b: +e.target.value})} /></div>
+                                        <div className="space-y-1"><label className="text-[10px] font-black text-slate-500 uppercase">Peralte h (cm)</label><input type="number" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-3 font-bold focus:border-blue-500 outline-none text-slate-800" value={section.h} onChange={e => setSection({...section, h: +e.target.value})} /></div>
+                                        <div className="space-y-1"><label className="text-[10px] font-black text-slate-500 uppercase">f'c (kg/cm²)</label><input type="number" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-3 font-bold focus:border-blue-500 outline-none text-slate-800" value={materials.fc} onChange={e => setMaterials({...materials, fc: +e.target.value})} /></div>
+                                        <div className="space-y-1"><label className="text-[10px] font-black text-slate-500 uppercase">fy (kg/cm²)</label><input type="number" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-3 font-bold focus:border-blue-500 outline-none text-slate-800" value={materials.fy} onChange={e => setMaterials({...materials, fy: +e.target.value})} /></div>
+                                        <div className="col-span-2 space-y-1"><label className="text-[10px] font-black text-slate-500 uppercase">Recubrimiento (cm)</label><input type="number" className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl p-3 font-bold focus:border-blue-500 outline-none text-slate-800" value={section.rec} onChange={e => setSection({...section, rec: +e.target.value})} /></div>
                                     </div>
                                 </div>
 
-                                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                                    <div className="bg-slate-100 p-3 flex items-center justify-between border-b">
-                                        <h2 className="font-bold text-xs uppercase text-slate-600 flex items-center gap-2"><Icon name="layers" size={14} /> Refuerzo</h2>
-                                        <button onClick={addLayer} className="bg-blue-600 text-white p-1 rounded-lg hover:bg-blue-700 transition-colors"><Icon name="plus" size={16} /></button>
+                                <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200 overflow-hidden">
+                                    <div className="bg-slate-100 p-4 flex justify-between items-center border-b">
+                                        <h2 className="font-black text-[10px] uppercase text-slate-500 tracking-widest">Capas de Refuerzo</h2>
+                                        <button onClick={addLayer} className="bg-slate-800 text-white p-2 rounded-xl hover:bg-black transition-all"><Icon name="plus" size={18} /></button>
                                     </div>
-                                    <div className="p-4 space-y-3 max-h-[300px] overflow-y-auto">
-                                        {layers.map((layer, idx) => (
-                                            <div key={layer.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 relative group">
-                                                <button onClick={() => removeLayer(layer.id)} className="absolute top-2 right-2 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Icon name="trash-2" size={14} /></button>
-                                                <div className="grid grid-cols-3 gap-2">
-                                                    <div><label className="text-[9px] font-bold text-slate-400 block mb-1">CANT.</label><input type="number" className="w-full p-1 bg-white border border-slate-200 rounded text-xs" value={layer.count} onChange={e => updateLayer(layer.id, 'count', +e.target.value)} /></div>
-                                                    <div><label className="text-[9px] font-bold text-slate-400 block mb-1">DIÁM.</label><select className="w-full p-1 bg-white border border-slate-200 rounded text-xs" value={layer.barIndex} onChange={e => updateLayer(layer.id, 'barIndex', +e.target.value)}>{BAR_SIZES.map((b, i) => <option key={i} value={i}>{b.label}</option>)}</select></div>
-                                                    <div><label className="text-[9px] font-bold text-slate-400 block mb-1">POS d</label><input type="number" className="w-full p-1 bg-white border border-slate-200 rounded text-xs" value={layer.d} onChange={e => updateLayer(layer.id, 'd', +e.target.value)} /></div>
+                                    <div className="p-4 space-y-4 max-h-[350px] overflow-y-auto">
+                                        {layers.map((layer) => (
+                                            <div key={layer.id} className="p-5 bg-slate-50 rounded-[1.5rem] border-2 border-slate-100 relative group text-slate-800">
+                                                <button onClick={() => removeLayer(layer.id)} className="absolute top-2 right-2 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Icon name="trash-2" size={16} /></button>
+                                                <div className="grid grid-cols-3 gap-3">
+                                                    <div><label className="text-[9px] font-black text-slate-400 block mb-1">CANT.</label><input type="number" className="w-full p-2 bg-white border border-slate-100 rounded-xl text-xs font-black outline-none" value={layer.count} onChange={e => updateLayer(layer.id, 'count', +e.target.value)} /></div>
+                                                    <div><label className="text-[9px] font-black text-slate-400 block mb-1">DIAM.</label><select className="w-full p-2 bg-white border border-slate-100 rounded-xl text-xs font-black outline-none" value={layer.barIndex} onChange={e => updateLayer(layer.id, 'barIndex', +e.target.value)}>{BAR_SIZES.map((b, i) => <option key={i} value={i}>{b.label}</option>)}</select></div>
+                                                    <div><label className="text-[9px] font-black text-slate-400 block mb-1">POS. d</label><input type="number" className="w-full p-2 bg-white border border-slate-100 rounded-xl text-xs font-black outline-none" value={layer.d} onChange={e => updateLayer(layer.id, 'd', +e.target.value)} /></div>
                                                 </div>
                                             </div>
                                         ))}
@@ -320,48 +453,22 @@
                                 </div>
                             </div>
 
-                            <div className="lg:col-span-8 space-y-4">
-                                <div className="bg-blue-600 rounded-2xl shadow-md p-5 text-white flex flex-col md:flex-row items-center gap-6">
-                                    <div className="flex items-center gap-3 border-r border-blue-400 pr-6">
-                                        <Icon name="activity" size={24} className="text-blue-200" />
-                                        <div><h2 className="font-black text-sm uppercase">Carga Solicitante</h2><p className="text-[10px] text-blue-100 italic">Cargas últimas actuantes</p></div>
-                                    </div>
-                                    <div className="flex-grow grid grid-cols-2 gap-4 w-full md:w-auto">
-                                        <div className="flex flex-col"><label className="text-[10px] font-bold text-blue-200 uppercase mb-1">Mu (ton-m)</label><input type="number" step="0.5" className="bg-blue-700 border border-blue-500 rounded-xl p-3 text-lg font-bold outline-none" value={load.mu} onChange={e => setLoad({...load, mu: +e.target.value})} /></div>
-                                        <div className="flex flex-col"><label className="text-[10px] font-bold text-blue-200 uppercase mb-1">Pu (ton)</label><input type="number" step="1" className="bg-blue-700 border border-blue-500 rounded-xl p-3 text-lg font-bold outline-none" value={load.pu} onChange={e => setLoad({...load, pu: +e.target.value})} /></div>
+                            <div className="lg:col-span-8 space-y-8">
+                                <div className="bg-blue-600 rounded-[2.5rem] shadow-2xl shadow-blue-100 p-8 text-white flex flex-col md:flex-row items-center gap-10 border-b-[12px] border-blue-800">
+                                    <div className="hidden md:flex bg-blue-500 p-5 rounded-3xl border-2 border-blue-400 shadow-inner"><Icon name="activity" size={32} /></div>
+                                    <div className="flex-grow grid grid-cols-2 gap-8 w-full">
+                                        <div className="space-y-2"><label className="text-[10px] font-black text-blue-200 uppercase tracking-[0.2em]">Momento Mu (ton-m)</label><input type="number" step="0.5" className="bg-blue-700 border-none rounded-2xl p-4 text-3xl font-black w-full outline-none focus:bg-blue-800 transition-colors shadow-inner" value={load.mu} onChange={e => setLoad({...load, mu: +e.target.value})} /></div>
+                                        <div className="space-y-2"><label className="text-[10px] font-black text-blue-200 uppercase tracking-[0.2em]">Carga Pu (ton)</label><input type="number" step="1" className="bg-blue-700 border-none rounded-2xl p-4 text-3xl font-black w-full outline-none focus:bg-blue-800 transition-colors shadow-inner" value={load.pu} onChange={e => setLoad({...load, pu: +e.target.value})} /></div>
                                     </div>
                                 </div>
-
-                                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 h-[520px] flex flex-col relative">
-                                    <div className="flex items-center justify-between mb-4">
-                                        <h3 className="font-black text-slate-700 text-sm flex items-center gap-2"><Icon name="maximize-2" size={16} className="text-blue-500" /> DIAGRAMA Mn-Pn</h3>
-                                        <div className="flex gap-4">
-                                            <div className="flex items-center gap-1.5 text-[9px] font-bold text-slate-500"><div className="w-2.5 h-2.5 bg-amber-500 rounded-full"></div> BALANCEADO</div>
-                                            <div className="flex items-center gap-1.5 text-[9px] font-bold text-slate-500"><div className="w-2.5 h-2.5 bg-red-500 rounded-sm"></div> SOLICITANTE</div>
-                                        </div>
-                                    </div>
-                                    <div className="flex-grow relative overflow-hidden">
-                                        <canvas ref={chartRef}></canvas>
-                                    </div>
+                                <div className="bg-white p-10 rounded-[2.5rem] border-2 border-slate-50 h-[600px] shadow-sm relative overflow-hidden text-slate-800">
+                                    <canvas ref={mainChartRef}></canvas>
                                 </div>
-
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                                    <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-center">
-                                        <span className="text-[9px] font-black text-slate-400 uppercase block mb-1">P₀ Nominal</span>
-                                        <span className="text-xl font-black text-slate-800">{results.P0.toFixed(1)} <small className="text-[10px] text-slate-400">ton</small></span>
-                                    </div>
-                                    <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-center">
-                                        <span className="text-[9px] font-black text-slate-400 uppercase block mb-1">φPn Máx</span>
-                                        <span className="text-xl font-black text-blue-600">{results.Pmax.toFixed(1)} <small className="text-[10px] text-slate-400">ton</small></span>
-                                    </div>
-                                    <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm text-center">
-                                        <span className="text-[9px] font-black text-slate-400 uppercase block mb-1">Punto Bal.</span>
-                                        <span className="text-xl font-black text-amber-600">{(results.balPoint.phi * results.balPoint.Pn).toFixed(1)} <small className="text-[10px] text-slate-400">ton</small></span>
-                                    </div>
-                                    <div className={`p-4 rounded-2xl border flex flex-col justify-center items-center shadow-sm ${results.isSafe ? 'bg-emerald-50 border-emerald-100' : 'bg-rose-50 border-rose-100'}`}>
-                                        <span className={`text-[9px] font-black uppercase mb-1 ${results.isSafe ? 'text-emerald-500' : 'text-rose-500'}`}>Ratio D/C</span>
-                                        <span className={`text-xl font-black ${results.isSafe ? 'text-emerald-700' : 'text-rose-700'}`}>{(load.pu / results.Pmax).toFixed(2)}</span>
-                                    </div>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                                    <div className="bg-white p-6 rounded-3xl border-2 border-slate-50 text-center shadow-sm text-slate-800"><span className="text-[10px] font-black text-slate-400 block mb-2 tracking-widest uppercase">Capacidad P₀</span><span className="text-3xl font-black">{results.P0.toFixed(1)} <small className="text-xs font-medium text-slate-400">t</small></span></div>
+                                    <div className="bg-white p-6 rounded-3xl border-2 border-slate-50 text-center shadow-sm text-slate-800"><span className="text-[10px] font-black text-blue-400 block mb-2 tracking-widest uppercase">φPn Máximo</span><span className="text-3xl font-black text-blue-600">{results.Pmax.toFixed(1)} <small className="text-xs font-medium text-blue-300">t</small></span></div>
+                                    <div className={`p-6 rounded-3xl border-2 text-center shadow-sm transition-all ${results.isSafe ? 'bg-emerald-50 border-emerald-100' : 'bg-rose-50 border-rose-100'}`}><span className="text-[10px] font-black text-slate-500 block mb-2 tracking-widest uppercase uppercase">Relación D/C</span><span className={`text-3xl font-black ${results.isSafe ? 'text-emerald-700' : 'text-rose-700'}`}>{(load.pu / results.Pmax).toFixed(2)}</span></div>
+                                    <div className="bg-white p-6 rounded-3xl border-2 border-slate-50 text-center shadow-sm text-slate-800"><span className="text-[10px] font-black text-slate-400 block mb-2 tracking-widest uppercase">Ast Total</span><span className="text-3xl font-black">{results.Ast.toFixed(2)} <small className="text-xs font-medium text-slate-400">cm²</small></span></div>
                                 </div>
                             </div>
                         </div>
