@@ -3,201 +3,495 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Diagrama Bioclimático de Givoni</title>
-    <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
+    <title>Carta Bioclimática de Givoni</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #f4f7f6;
-            margin: 0;
-            padding: 20px;
-            color: #333;
-        }
-       .container {
-            max-width: 1000px;
-            margin: 0 auto;
-            background: #fff;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-        }
-        h1 {
-            text-align: center;
-            color: #2c3e50;
-        }
-       .controls {
-            display: flex;
-            justify-content: center;
-            gap: 15px;
-            margin-bottom: 20px;
-            padding: 15px;
-            background: #ecf0f1;
-            border-radius: 8px;
-        }
-       .control-group {
-            display: flex;
-            flex-direction: column;
-        }
-        label {
-            font-weight: bold;
-            font-size: 14px;
-            margin-bottom: 5px;
-        }
-        input {
-            padding: 8px;
-            border: 1px solid #bdc3c7;
-            border-radius: 4px;
-            width: 120px;
-        }
-        button {
-            padding: 10px 20px;
-            background-color: #2980b9;
-            color: white;
-            border: none;
-            border-radius: 4px;
+        body { font-family: 'Inter', sans-serif; }
+        .slider-thumb::-webkit-slider-thumb {
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            background: #2563eb;
+            border-radius: 50%;
             cursor: pointer;
-            font-weight: bold;
-            align-self: flex-end;
         }
-        button:hover {
-            background-color: #3498db;
-        }
-        #givoniChart {
+        .svg-container {
+            position: relative;
             width: 100%;
-            height: 600px;
+            height: 0;
+            padding-bottom: 75%; /* Aspect ratio 4:3 */
+        }
+        .svg-container svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            cursor: crosshair;
+        }
+        /* Transiciones suaves para los polígonos */
+        polygon {
+            transition: opacity 0.2s ease, stroke-width 0.2s ease;
+        }
+        polygon:hover {
+            opacity: 0.9 !important;
+            stroke-width: 2px !important;
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1;
+            border-radius: 4px;
         }
     </style>
 </head>
-<body>
+<body class="bg-slate-50 min-h-screen text-slate-800">
 
-<div class="container">
-    <h1>Calculadora y Diagrama de Givoni</h1>
-    
-    <div class="controls">
-        <div class="control-group">
-            <label for="temp">Temperatura (°C):</label>
-            <input type="number" id="temp" value="28" step="0.1">
+    <div class="max-w-7xl mx-auto p-4 md:p-6 lg:p-8">
+        <!-- Header -->
+        <header class="mb-8 flex items-center gap-4 border-b border-slate-200 pb-4">
+            <div class="p-3 bg-blue-600 text-white rounded-lg shadow-sm">
+                <i data-lucide="thermometer-sun" class="w-6 h-6"></i>
+            </div>
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900">Carta Bioclimática de Givoni</h1>
+                <p class="text-sm text-slate-500">Evaluación de estrategias de diseño pasivo y confort térmico</p>
+            </div>
+        </header>
+
+        <div class="flex flex-col lg:flex-row gap-6">
+            
+            <!-- Panel Izquierdo: Controles y Resultados -->
+            <div class="w-full lg:w-1/3 flex flex-col gap-6">
+                
+                <!-- Tarjeta de Controles -->
+                <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+                    <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                        <i data-lucide="sliders-horizontal" class="w-5 h-5 text-blue-500"></i>
+                        Condiciones Ambientales
+                    </h2>
+                    
+                    <div class="space-y-5">
+                        <!-- Temperatura -->
+                        <div>
+                            <div class="flex justify-between mb-1">
+                                <label class="text-sm font-medium text-slate-700">Temperatura Seca</label>
+                                <span id="tempVal" class="text-sm font-bold text-blue-600">25.0 °C</span>
+                            </div>
+                            <input type="range" id="tempSlider" min="-5" max="50" step="0.1" value="25" 
+                                class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer slider-thumb">
+                            <div class="flex justify-between text-xs text-slate-400 mt-1">
+                                <span>-5 °C</span><span>50 °C</span>
+                            </div>
+                        </div>
+
+                        <!-- Humedad Relativa -->
+                        <div>
+                            <div class="flex justify-between mb-1">
+                                <label class="text-sm font-medium text-slate-700">Humedad Relativa</label>
+                                <span id="rhVal" class="text-sm font-bold text-blue-600">50 %</span>
+                            </div>
+                            <input type="range" id="rhSlider" min="0" max="100" step="1" value="50" 
+                                class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer slider-thumb">
+                            <div class="flex justify-between text-xs text-slate-400 mt-1">
+                                <span>0 %</span><span>100 %</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tarjeta de Resultados Analíticos -->
+                <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+                    <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                        <i data-lucide="clipboard-check" class="w-5 h-5 text-emerald-500"></i>
+                        Análisis Psicométrico
+                    </h2>
+                    
+                    <div class="grid grid-cols-2 gap-3 mb-5">
+                        <div class="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                            <p class="text-xs text-slate-500 mb-1">Humedad Absoluta</p>
+                            <p class="text-lg font-bold text-slate-800"><span id="absHumVal">10.0</span> <span class="text-xs font-normal text-slate-500">g/kg</span></p>
+                        </div>
+                        <div class="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                            <p class="text-xs text-slate-500 mb-1">Presión de Vapor</p>
+                            <p class="text-lg font-bold text-slate-800"><span id="vpVal">1.58</span> <span class="text-xs font-normal text-slate-500">kPa</span></p>
+                        </div>
+                    </div>
+
+                    <h3 class="text-sm font-medium text-slate-700 mb-2 border-b border-slate-100 pb-1">Estrategias Recomendadas (Zonas Activas)</h3>
+                    <div id="activeZonesList" class="flex flex-col gap-2 max-h-[220px] overflow-y-auto custom-scrollbar pr-2">
+                        <!-- Zonas inyectadas por JS -->
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- Panel Derecho: Gráfico -->
+            <div class="w-full lg:w-2/3 bg-white rounded-xl shadow-sm border border-slate-200 p-5 flex flex-col">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-semibold flex items-center gap-2">
+                        <i data-lucide="line-chart" class="w-5 h-5 text-indigo-500"></i>
+                        Diagrama Psicrométrico y Zonas
+                    </h2>
+                    <span class="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-md border border-slate-200">
+                        Haz clic en el gráfico para evaluar un punto
+                    </span>
+                </div>
+                
+                <div class="svg-container bg-slate-50 rounded-lg border border-slate-200 overflow-hidden" id="chartContainer">
+                    <svg id="givoniChart" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid meet">
+                        <!-- Elementos inyectados por JS -->
+                    </svg>
+                </div>
+            </div>
+
         </div>
-        <div class="control-group">
-            <label for="rh">Humedad Relativa (%):</label>
-            <input type="number" id="rh" value="60" step="1" min="0" max="100">
-        </div>
-        <button onclick="plotPoint()">Analizar Punto</button>
     </div>
 
-    <div id="givoniChart"></div>
-</div>
+    <script>
+        // Inicializar Iconos Lucide
+        lucide.createIcons();
 
-<script>
-    // Fórmula termodinámica para calcular la Humedad Absoluta (g/kg)
-    function calcularHumedadAbsoluta(t, rh) {
-        const rh_frac = rh / 100.0;
-        // Presión de vapor de agua (Pa)
-        const pwv = 610.48 * rh_frac * Math.pow(10, (7.5 * t) / (235 + t));
-        const p = 101325; // Presión atmosférica estándar a nivel del mar (Pa)
-        // Humedad Absoluta en g/kg de aire seco
-        return 0.6221 * (pwv / (p - pwv)) * 1000;
-    }
+        // --------------------------------------------------------
+        // MATEMÁTICA PSICROMÉTRICA Y CÁLCULOS
+        // --------------------------------------------------------
+        const Patm = 101.325; // Presión atmosférica estándar a nivel del mar (kPa)
 
-    // Curva de saturación (100% HR)
-    let sat_x =;
-    let sat_y =;
-    for(let t = 0; t <= 50; t += 0.5) {
-        sat_x.push(t);
-        sat_y.push(calcularHumedadAbsoluta(t, 100));
-    }
-
-    const curve100 = {
-        x: sat_x,
-        y: sat_y,
-        mode: 'lines',
-        name: 'Curva de Saturación (100% HR)',
-        line: { color: 'blue', width: 2 }
-    };
-
-    // Polígonos de zonas bioclimáticas (Coordenadas aproximadas estándar)
-    const zonas = [
-        {
-            x: [20, 20, 26, 27, 27, 20],
-            y: [4, 12, 14, 14, 4, 4],
-            fill: 'toself',
-            fillcolor: 'rgba(46, 204, 113, 0.5)',
-            line: { color: '#27ae60' },
-            name: '1. Zona de Confort'
-        },
-        {
-            x: [26, 27, 32, 32, 26],
-            y: [4, 14, 14, 4, 4],
-            fill: 'toself',
-            fillcolor: 'rgba(52, 152, 219, 0.3)',
-            line: { color: '#2980b9' },
-            name: '2. Ventilación Natural'
-        },
-        {
-            x: [26, 26, 36, 36, 26],
-            y: [4, 10, 10, 4, 4],
-            fill: 'toself',
-            fillcolor: 'rgba(241, 196, 15, 0.4)',
-            line: { color: '#f39c12' },
-            name: '3. Alta Masa Térmica'
-        },
-        {
-            x: [26, 27, 35, 44, 36, 26],
-            y: [10, 14, 14, 4, 4, 10],
-            fill: 'toself',
-            fillcolor: 'rgba(155, 89, 182, 0.3)',
-            line: { color: '#8e44ad' },
-            name: '4. Enfriamiento Evaporativo'
-        },
-        {
-            x: [10, 10, 20, 20, 10],
-            y: [2, 10, 12, 4, 2],
-            fill: 'toself',
-            fillcolor: 'rgba(231, 76, 60, 0.3)',
-            line: { color: '#c0392b' },
-            name: '5. Calefacción Solar Pasiva'
+        // Presión de vapor de saturación (kPa) dado T(°C) - Ecuación de Magnus-Tetens
+        function getSatVaporPressure(t) {
+            return 0.61078 * Math.exp((17.27 * t) / (t + 237.3));
         }
-    ];
 
-    let layout = {
-        title: 'Carta Bioclimática de Givoni (A nivel del mar)',
-        xaxis: { 
-            title: 'Temperatura de Bulbo Seco (°C)', 
-            range: ,
-            dtick: 5
-        },
-        yaxis: { 
-            title: 'Humedad Absoluta (g vapor/kg aire seco)', 
-            range: ,
-            dtick: 2
-        },
-        showlegend: true,
-        hovermode: 'closest'
-    };
+        // Humedad absoluta (W en g/kg) dado T(°C) y HR(%)
+        function getAbsHumidity(t, rh) {
+            const Psat = getSatVaporPressure(t);
+            const Pv = (rh / 100) * Psat;
+            // W = 0.62198 * Pv / (Patm - Pv) * 1000  (en gramos)
+            return (0.62198 * Pv / (Patm - Pv)) * 1000;
+        }
 
-    // Renderizar gráfico inicial
-    Plotly.newPlot('givoniChart', [curve100,...zonas], layout);
+        // Humedad relativa (%) dado T(°C) y W(g/kg)
+        function getRelativeHumidity(t, w) {
+            const W_kg = w / 1000;
+            const Pv = (W_kg * Patm) / (0.62198 + W_kg);
+            const Psat = getSatVaporPressure(t);
+            return Math.max(0, Math.min(100, (Pv / Psat) * 100));
+        }
 
-    // Función para analizar y graficar el punto ingresado
-    function plotPoint() {
-        const t = parseFloat(document.getElementById('temp').value);
-        const rh = parseFloat(document.getElementById('rh').value);
-        const ah = calcularHumedadAbsoluta(t, rh);
+        // --------------------------------------------------------
+        // CONFIGURACIÓN DEL GRÁFICO (Coordenadas T y W)
+        // --------------------------------------------------------
+        const chartW = 800;
+        const chartH = 600;
+        const padX = 60;
+        const padY = 50;
+        
+        // Límites del gráfico psicrométrico
+        const minT = -5, maxT = 50;
+        const minW = 0, maxW = 30;
 
-        const userPoint = {
-            x: [t],
-            y: [ah],
-            mode: 'markers+text',
-            name: 'Punto Evaluado',
-            text: [`(${t}°C, ${rh}%)`],
-            textposition: 'top right',
-            marker: { size: 10, color: 'red', symbol: 'circle-dot' }
-        };
+        function mapX(t) {
+            return padX + ((t - minT) / (maxT - minT)) * (chartW - padX * 2);
+        }
 
-        // Mantener las zonas base y reemplazar el punto anterior si lo hubiera
-        Plotly.react('givoniChart', [curve100,...zonas, userPoint], layout);
-    }
-</script>
+        function mapY(w) {
+            return chartH - padY - ((w - minW) / (maxW - minW)) * (chartH - padY * 2);
+        }
 
+        function unmapX(x) {
+            return minT + ((x - padX) / (chartW - padX * 2)) * (maxT - minT);
+        }
+
+        function unmapY(y) {
+            return minW + ((chartH - padY - y) / (chartH - padY * 2)) * (maxW - minW);
+        }
+
+        // --------------------------------------------------------
+        // ZONAS DE GIVONI (Límites ajustados en espacio T(°C), W(g/kg))
+        // --------------------------------------------------------
+        const givoniZones = [
+            { id: 1, name: "1. Zona de Confort", color: "rgba(34, 197, 94, 0.5)", stroke: "#16a34a", 
+              poly: [[22, 3.43], [27, 4.64], [27, 12], [25, 13.87], [22, 11.65]], desc: "Condiciones óptimas sin intervención." },
+              
+            { id: 2, name: "2. Confort Permisible", color: "rgba(134, 239, 172, 0.4)", stroke: "#4ade80", 
+              poly: [[21.5, 3.3], [28, 4.64], [28, 12.85],[25, 14.87], [21.5, 11.75]], desc: "Confortable con adaptación de vestimenta." },
+              
+            { id: 3, name: "3. Ganancias Internas", color: "rgba(250, 204, 21, 0.4)", stroke: "#eab308", 
+              poly: [[15, 0], [21.5, 0], [21.5, 15.68], [15, 10.68]], desc: "Calefacción mediante calor de ocupantes y equipos." },
+              
+            { id: 4, name: "4. Calefacción Solar Pasiva", color: "rgba(251, 146, 60, 0.4)", stroke: "#f97316", 
+              poly: [[8.5, 0], [15, 0], [15, 10.68], [8.5, 6.91]], desc: "Captación solar directa a través de vidrios." },
+              
+            { id: 5, name: "5. Calefacción Solar Activa", color: "rgba(248, 113, 113, 0.4)", stroke: "#ef4444", 
+              poly: [[2.5, 0], [8.5, 0], [8.5, 6.91], [2.5, 5]], desc: "Sistemas mecánicos de captación solar térmica." },
+              
+            { id: 7, name: "7. Calefacción Convencional", color: "rgba(225, 29, 72, 0.4)", stroke: "#be123c", 
+              poly: [[-5, 0], [2.5, 0], [2.5, 14], [-5, 14]], desc: "Requiere sistemas de calefacción activa." },
+              
+            { id: 9, name: "9. Alta Masa Térmica", color: "rgba(192, 132, 252, 0.4)", stroke: "#a855f7", 
+              poly: [[21.5, 3.3], [35, 3.3], [35, 10.46], [32, 15.13],[25, 14.87], [28, 12.85], [28, 4.64]], desc: "Materiales pesados para inercia térmica." },
+              
+            { id: 11, name: "11. Masa Térmica + Ren. Nocturna", color: "rgba(232, 121, 249, 0.4)", stroke: "#d946ef", 
+              poly: [[21.5, 3.3], [44, 3.3], [44, 10.46], [40, 15.13],[25, 14.87], [28, 12.85], [28, 4.64]], desc: "Inercia térmica combinada con ventilación nocturna." },
+              
+            { id: 10, name: "10. Enfriamiento Evaporativo", color: "rgba(45, 212, 191, 0.4)", stroke: "#14b8a6", 
+              poly: [[21.5, 3.3], [30, 0], [40, 0], [40, 4.5],[39, 8.75],[25, 14.87], [28, 12.85], [28, 4.64]], desc: "Reducción de temperatura añadiendo humedad." },
+              
+            { id: 12, name: "12. Ventilación Natural", color: "rgba(59, 130, 246, 0.4)", stroke: "#2563eb", 
+              poly: [[28, 4.64],[31.5, 5.8],[31.5, 12.9], [26, 21], [21.5, 18],[21.5, 11.92], [25, 14.87], [28, 12.76]], desc: "Flujo de aire para aumentar evaporación corporal." },
+              
+            { id: 14, name: "14. Deshumidificación", color: "rgba(14, 165, 233, 0.4)", stroke: "#0ea5e9", 
+              poly: [[21.5, 12.83],[27.5, 18.45], [32.5, 24.53], [32.5, 30], [21.5, 30]], desc: "Extracción mecánica de humedad." },
+              
+            { id: 13, name: "13. Aire Acondicionado", color: "rgba(100, 116, 139, 0.4)", stroke: "#475569", 
+              poly: [[32, 14], [50, 14], [50, 30], [32, 30]], desc: "Climatización mecánica necesaria." },
+              
+            { id: 6, name: "6. Humidificación", color: "rgba(217, 119, 6, 0.4)", stroke: "#b45309", 
+              poly: [[-5, 0], [23, 0], [23, 2],[15, 2.73],[10, 2.52], [-5, 0.71]], desc: "Adición de humedad por sequedad extrema." }
+        ];
+
+        // --------------------------------------------------------
+        // CONSTRUCCIÓN DEL SVG
+        // --------------------------------------------------------
+        const svg = document.getElementById('givoniChart');
+
+        function generatePath100RH() {
+            let path = `M ${mapX(minT)},${mapY(minW)} `;
+            for (let t = minT; t <= maxT; t += 1) {
+                let w = getAbsHumidity(t, 100);
+                if (w > maxW) {
+                    path += `L ${mapX(t)},${mapY(maxW)} `;
+                    break;
+                }
+                path += `L ${mapX(t)},${mapY(w)} `;
+            }
+            path += `L ${mapX(maxT)},${mapY(minW)} Z`;
+            return path;
+        }
+
+        function drawChartBase() {
+            let html = '';
+
+            // 1. ClipPath para restringir los polígonos a la zona física posible (HR <= 100%)
+            html += `<defs>
+                        <clipPath id="psyClip">
+                            <path d="${generatePath100RH()}" />
+                        </clipPath>
+                     </defs>`;
+
+            // 2. Ejes y cuadrícula
+            // Líneas Verticales (Temperatura)
+            for (let t = minT; t <= maxT; t += 5) {
+                const x = mapX(t);
+                html += `<line x1="${x}" y1="${mapY(minW)}" x2="${x}" y2="${mapY(maxW)}" stroke="#e2e8f0" stroke-width="1"/>`;
+                html += `<text x="${x}" y="${chartH - padY + 15}" font-size="11" fill="#64748b" text-anchor="middle">${t}</text>`;
+            }
+            
+            // Líneas Horizontales (Humedad Absoluta)
+            for (let w = minW; w <= maxW; w += 5) {
+                const y = mapY(w);
+                html += `<line x1="${mapX(minT)}" y1="${y}" x2="${mapX(maxT)}" y2="${y}" stroke="#e2e8f0" stroke-width="1"/>`;
+                html += `<text x="${padX - 10}" y="${y + 4}" font-size="11" fill="#64748b" text-anchor="end">${w}</text>`;
+            }
+
+            // Etiquetas de los ejes
+            html += `<text x="${chartW/2}" y="${chartH - 10}" font-size="13" font-weight="600" fill="#334155" text-anchor="middle">Temperatura de Bulbo Seco (°C)</text>`;
+            html += `<text x="${20}" y="${chartH/2}" font-size="13" font-weight="600" fill="#334155" text-anchor="middle" transform="rotate(-90, 20, ${chartH/2})">Humedad Absoluta (g/kg)</text>`;
+
+            // 3. Curvas de Humedad Relativa (10% a 100%)
+            for (let rh = 10; rh <= 100; rh += 10) {
+                let d = '';
+                for (let t = minT; t <= maxT; t += 1) {
+                    let w = getAbsHumidity(t, rh);
+                    if (w > maxW) w = maxW;
+                    const x = mapX(t);
+                    const y = mapY(w);
+                    d += (t === minT ? `M ${x},${y} ` : `L ${x},${y} `);
+                }
+                const is100 = rh === 100;
+                html += `<path d="${d}" fill="none" stroke="${is100 ? '#ef4444' : '#94a3b8'}" stroke-width="${is100 ? '2' : '1'}" stroke-dasharray="${is100 ? '0' : '4 4'}"/>`;
+                
+                // Etiqueta de HR al final de la curva
+                let labelT = 40;
+                let labelW = getAbsHumidity(labelT, rh);
+                if(labelW > maxW - 2) {
+                    labelW = maxW - 1;
+                    labelT = unmapX(mapX(labelT)); // aproximar
+                }
+                if(rh !== 100 && labelW < maxW) {
+                    // html += `<text x="${mapX(labelT)}" y="${mapY(labelW)-5}" font-size="9" fill="#94a3b8" transform="rotate(-15, ${mapX(labelT)}, ${mapY(labelW)})">${rh}%</text>`;
+                }
+            }
+
+            // 4. Dibujar Polígonos de Givoni (recortados por clipPath)
+            html += `<g clip-path="url(#psyClip)">`;
+            // Invertimos para que las zonas grandes no tapen a las pequeñas
+            [...givoniZones].reverse().forEach(zone => {
+                const points = zone.poly.map(p => `${mapX(p[0])},${mapY(p[1])}`).join(' ');
+                html += `<polygon id="poly-${zone.id}" points="${points}" fill="${zone.color}" stroke="${zone.stroke}" stroke-width="1" style="pointer-events: none;"/>`;
+            });
+            html += `</g>`;
+
+            // Contenedor para el punto interactivo
+            html += `<g id="pointLayer"></g>`;
+
+            svg.innerHTML = html;
+        }
+
+        // --------------------------------------------------------
+        // LÓGICA DE INTERACTIVIDAD
+        // --------------------------------------------------------
+        let currentT = 25;
+        let currentRH = 50;
+
+        const tempSlider = document.getElementById('tempSlider');
+        const rhSlider = document.getElementById('rhSlider');
+        const tempVal = document.getElementById('tempVal');
+        const rhVal = document.getElementById('rhVal');
+        const absHumVal = document.getElementById('absHumVal');
+        const vpVal = document.getElementById('vpVal');
+        const activeZonesList = document.getElementById('activeZonesList');
+
+        // Algoritmo Ray-Casting para detectar si punto [t,w] está dentro de polígono
+        function isPointInPoly(pt, poly) {
+            let inside = false;
+            for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+                let xi = poly[i][0], yi = poly[i][1];
+                let xj = poly[j][0], yj = poly[j][1];
+                let intersect = ((yi > pt[1]) !== (yj > pt[1]))
+                    && (pt[0] < (xj - xi) * (pt[1] - yi) / (yj - yi) + xi);
+                if (intersect) inside = !inside;
+            }
+            return inside;
+        }
+
+        function updateUI() {
+            // Actualizar textos
+            tempVal.textContent = currentT.toFixed(1) + ' °C';
+            rhVal.textContent = currentRH.toFixed(0) + ' %';
+            tempSlider.value = currentT;
+            rhSlider.value = currentRH;
+
+            // Cálculos psicrométricos
+            const w = getAbsHumidity(currentT, currentRH);
+            const psat = getSatVaporPressure(currentT);
+            const vp = (currentRH / 100) * psat;
+
+            absHumVal.textContent = w.toFixed(2);
+            vpVal.textContent = vp.toFixed(2);
+
+            // Dibujar punto en SVG
+            const pointLayer = document.getElementById('pointLayer');
+            const px = mapX(currentT);
+            const py = mapY(w);
+            
+            pointLayer.innerHTML = `
+                <circle cx="${px}" cy="${py}" r="6" fill="#ef4444" stroke="white" stroke-width="2" class="shadow-sm"/>
+                <line x1="${px}" y1="${mapY(minW)}" x2="${px}" y2="${py}" stroke="#ef4444" stroke-width="1" stroke-dasharray="2 2"/>
+                <line x1="${mapX(minT)}" y1="${py}" x2="${px}" y2="${py}" stroke="#ef4444" stroke-width="1" stroke-dasharray="2 2"/>
+            `;
+
+            // Evaluar Zonas Activas
+            const pt = [currentT, w];
+            let activeZones = [];
+            
+            // Reajustar opacidades de todos
+            givoniZones.forEach(z => {
+                const el = document.getElementById(`poly-${z.id}`);
+                if (el) el.style.opacity = '0.3';
+            });
+
+            givoniZones.forEach(z => {
+                if (isPointInPoly(pt, z.poly)) {
+                    activeZones.push(z);
+                    const el = document.getElementById(`poly-${z.id}`);
+                    if (el) el.style.opacity = '0.9'; // Resaltar zona activa
+                }
+            });
+
+            // Actualizar lista en panel izquierdo
+            activeZonesList.innerHTML = '';
+            if (activeZones.length === 0) {
+                activeZonesList.innerHTML = `<p class="text-sm text-slate-500 italic">Punto fuera de las zonas estratégicas definidas.</p>`;
+            } else {
+                activeZones.forEach(z => {
+                    activeZonesList.innerHTML += `
+                        <div class="flex items-start gap-3 p-3 rounded-lg border border-slate-100 bg-white shadow-sm transition-all hover:border-slate-300">
+                            <div class="w-4 h-4 rounded-full mt-0.5 shrink-0" style="background-color: ${z.stroke};"></div>
+                            <div>
+                                <h4 class="text-sm font-bold text-slate-800">${z.name}</h4>
+                                <p class="text-xs text-slate-500 mt-1">${z.desc}</p>
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+        }
+
+        // Manejadores de Eventos (Sliders)
+        tempSlider.addEventListener('input', (e) => {
+            currentT = parseFloat(e.target.value);
+            updateUI();
+        });
+
+        rhSlider.addEventListener('input', (e) => {
+            currentRH = parseFloat(e.target.value);
+            updateUI();
+        });
+
+        // Interacción con el SVG (Clic y Arrastre)
+        let isDragging = false;
+
+        function updateFromMouse(e) {
+            const rect = svg.getBoundingClientRect();
+            // Calcular coordenadas SVG relativas al viewBox
+            const scaleX = chartW / rect.width;
+            const scaleY = chartH / rect.height;
+            const x = (e.clientX - rect.left) * scaleX;
+            const y = (e.clientY - rect.top) * scaleY;
+
+            let t = unmapX(x);
+            let w = unmapY(y);
+
+            // Limitar dentro del gráfico
+            t = Math.max(minT, Math.min(maxT, t));
+            w = Math.max(minW, Math.min(maxW, w));
+
+            // Calcular Humedad Relativa
+            let rh = getRelativeHumidity(t, w);
+            
+            // Restringir a la zona física (HR máximo 100%)
+            if (rh > 100 || w > getAbsHumidity(t, 100)) {
+                rh = 100;
+                // Si limitamos HR a 100%, reajustamos W a la curva de saturación
+                w = getAbsHumidity(t, 100); 
+            }
+
+            currentT = t;
+            currentRH = rh;
+            updateUI();
+        }
+
+        svg.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            updateFromMouse(e);
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (isDragging) updateFromMouse(e);
+        });
+
+        window.addEventListener('mouseup', () => {
+            isDragging = false;
+        });
+
+        // Inicializar aplicación
+        drawChartBase();
+        updateUI();
+
+    </script>
 </body>
 </html>
